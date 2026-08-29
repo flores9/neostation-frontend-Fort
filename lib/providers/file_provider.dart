@@ -25,16 +25,8 @@ class FileProvider extends ChangeNotifier {
   Map<String, Set<String>> _systemExtensions = {};
 
   String? _esdeRoot;
-
-  /// NeoStation system folder -> absolute automatically resolved ES-DE media
-  /// directory for that system.
   Map<String, String> _esdeSystemMediaPaths = {};
-
-  /// NeoStation system folder -> Fort manual media root. A manual value wins
-  /// over ES-DE automatic resolution, but NeoStation-owned scraped artwork
-  /// remains the first display source as in upstream.
   Map<String, String> _manualSystemMediaPaths = {};
-
   Map<String, String> _esdeMediaSubdirs = {};
 
   static String _esdeSubdirKey(String systemFolder, String romBase) =>
@@ -331,7 +323,11 @@ class FileProvider extends ChangeNotifier {
     String romName, [
     List<String>? extensions,
   ]) {
-    final manualPath = _manualSystemMediaPaths[systemFolderName.toLowerCase()];
+    final liveManual = FortSystemPathService.cachedForSystem(
+      systemFolderName,
+    )?.mediaDirectory;
+    final manualPath =
+        liveManual ?? _manualSystemMediaPaths[systemFolderName.toLowerCase()];
     final systemMediaPath = manualPath ?? _esdeSystemMediaPaths[systemFolderName];
     if (systemMediaPath == null) return const [];
 
