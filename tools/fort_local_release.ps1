@@ -53,10 +53,8 @@ $FvmConfig = Get-Content ".fvmrc" -Raw | ConvertFrom-Json
 $RequiredFlutter = [string]$FvmConfig.flutter
 
 $FlutterCommand = $null
-$FlutterPrefix = @()
 if (Get-Command fvm -ErrorAction SilentlyContinue) {
     $FlutterCommand = "fvm"
-    $FlutterPrefix = @("flutter")
     Invoke-Checked "Install/select Flutter $RequiredFlutter with FVM" {
         & fvm install $RequiredFlutter
         if ($LASTEXITCODE -ne 0) { return }
@@ -78,6 +76,17 @@ function Invoke-Flutter {
     }
 }
 
+function Invoke-Dart {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    if ($FlutterCommand -eq "fvm") {
+        & fvm dart @Args
+    } elseif (Get-Command dart -ErrorAction SilentlyContinue) {
+        & dart @Args
+    } else {
+        throw "Dart was not found in PATH. Install FVM (recommended) or expose the Dart binary bundled with Flutter."
+    }
+}
+
 Invoke-Checked "Flutter version" { Invoke-Flutter --version }
 
 $Java = Get-Command java -ErrorAction SilentlyContinue
@@ -91,7 +100,7 @@ if (-not $Java) {
 
 $KeyProperties = Join-Path $RepoRoot "android\key.properties"
 if (-not (Test-Path $KeyProperties) -and -not $AllowDebugSigning) {
-    throw "android\key.properties is missing. A publishable Fort release requires permanent signing. Use -AllowDebugSigning only for a disposable test APK."
+    throw "android\key.properties is missing. Run .\tools\fort_setup_signing.ps1 once for permanent Fort signing, or use -AllowDebugSigning only for a disposable test APK."
 }
 
 $DistRoot = Join-Path $RepoRoot "dist\$ReleaseName"
@@ -103,11 +112,7 @@ New-Item $Logs -ItemType Directory -Force | Out-Null
 Invoke-Checked "Flutter dependencies" { Invoke-Flutter pub get }
 
 Invoke-Checked "Dart formatting check" {
-    if ($FlutterCommand -eq "fvm") {
-        & fvm dart format --output=none --set-exit-if-changed lib test
-    } else {
-        & dart format --output=none --set-exit-if-changed lib test
-    }
+    Invoke-Dart format --output=none --set-exit-if-changed lib test
 }
 
 if (-not $SkipAnalyze) {
@@ -140,6 +145,7 @@ if (Test-Path "docs\fort") {
     Copy-Item "docs\fort\*" $DocsTarget -Recurse -Force
 }
 Copy-Item "tools\fort_local_release.ps1" $DistRoot -Force
+Copy-Item "tools\fort_setup_signing.ps1" $DistRoot -Force
 
 $Manifest = @"
 NeoStation Fort local release manifest
