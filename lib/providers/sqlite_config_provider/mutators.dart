@@ -70,12 +70,18 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Persists the user's ES-DE application folder path (used by ES-DE import
-  /// and read-time fallback artwork resolution).
+  /// Persists the user's ES-DE application folder path. Fort immediately
+  /// rescans when a non-empty ES-DE root is selected so exact per-system ROM
+  /// paths from ES-DE are present in `user_roms` before metadata import runs.
   Future<void> updateEsdeFolderPath(String path) async {
-    _config = _config.copyWith(esdeFolderPath: path);
+    final normalized = path.trim();
+    _config = _config.copyWith(esdeFolderPath: normalized);
     await SqliteConfigService.saveConfig(_config);
     _notify();
+
+    if (normalized.isNotEmpty && !_isScanning) {
+      await scanSystems();
+    }
   }
 
   Future<void> updateHideRecentCard(bool value) async {
@@ -116,10 +122,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
   }
 
   /// Shows or hides [tab] in the header strip and the L1/R1 tab cycle.
-  ///
-  /// Routed through the tab's [NavTabSpec] so a future tab needs only a spec
-  /// entry, not another mutator. A tab with no `withHidden` (Systems, Settings)
-  /// can't be hidden and is ignored.
   Future<void> updateNavTabHidden(NavTab tab, bool hidden) async {
     final applyHidden = navTabSpec(tab).withHidden;
     if (applyHidden == null) return;
@@ -166,16 +168,10 @@ extension SqliteConfigMutators on SqliteConfigProvider {
 
   /// Persists the global "Show Subfolders" choice and applies it to every
   /// system.
-  ///
-  /// The game list reads the per-system flag, so the stored config value alone
-  /// would change nothing: the stamp is what makes the toggle global. Systems
-  /// keep their own toggle afterwards, and a later flip of this one overwrites
-  /// them again.
   Future<void> updateSubfolderViewAll(bool value) async {
     _config = _config.copyWith(subfolderViewAll: value);
     await SqliteConfigService.saveConfig(_config);
     await SystemRepository.setSubfolderViewForAll(value);
-    // The in-memory system models still carry the old per-system flag.
     await refreshDetectedSystems();
     _notify();
   }
@@ -198,10 +194,7 @@ extension SqliteConfigMutators on SqliteConfigProvider {
   Future<void> updateSfxEnabled(bool value) async {
     _config = _config.copyWith(sfxEnabled: value);
     await SqliteConfigService.saveConfig(_config);
-    // Apply immediately to the running service — no restart needed.
     SfxService().setEnabled(value);
-    // The secondary display runs its own engine with its own SfxService
-    // singleton, so it has to be told separately or it keeps playing.
     _secondaryDisplayState?.updateState(sfxEnabled: value);
     _notify();
   }
@@ -211,9 +204,7 @@ extension SqliteConfigMutators on SqliteConfigProvider {
   Future<void> updateSfxVolume(double value) async {
     final volume = value.clamp(0.0, SfxService.maxVolume).toDouble();
     _config = _config.copyWith(sfxVolume: volume);
-    // Apply immediately to the running service — no restart needed.
     SfxService().setVolume(volume);
-    // Mirror it to the secondary engine's own SfxService (see updateSfxEnabled).
     _secondaryDisplayState?.updateState(sfxVolume: volume);
     _notify();
     unawaited(SfxService().playVolumePreview());
@@ -229,15 +220,12 @@ extension SqliteConfigMutators on SqliteConfigProvider {
   }
 
   /// Updates the global audio mute state for game preview videos.
-  ///
-  /// Automatically synchronizes the mute state with the secondary display if connected.
   Future<void> updateVideoSound(bool value) async {
     if (_config.videoSound == value) return;
     _config = _config.copyWith(videoSound: value);
     // ignore: unawaited_futures
-    SqliteConfigService.saveConfig(_config); // No await to avoid lag
+    SqliteConfigService.saveConfig(_config);
 
-    // Sincronizar con pantalla secundaria si está activa
     if (_secondaryDisplayState != null) {
       final current = _secondaryDisplayState!.value;
       if (current != null) {
@@ -248,14 +236,10 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Toggles the current video audio mute state.
   Future<void> toggleVideoSound() async {
     await updateVideoSound(!_config.videoSound);
   }
 
-  /// Sets the inactivity delay (seconds) before the secondary Now Playing panel
-  /// dims; `0` disables dimming. Persists and pushes the value to the secondary
-  /// display.
   Future<void> updateNowPlayingDimDelay(int seconds) async {
     _config = _config.copyWith(nowPlayingDimDelay: seconds);
     await SqliteConfigService.saveConfig(_config);
@@ -263,8 +247,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Sets how dark the secondary Now Playing panel goes when dimmed (0–100%).
-  /// Persists and pushes the value to the secondary display.
   Future<void> updateNowPlayingDimLevel(int percent) async {
     final clamped = percent.clamp(0, 100);
     _config = _config.copyWith(nowPlayingDimLevel: clamped);
@@ -273,8 +255,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Sets how much the game fanart/background art is dimmed behind the logo on
-  /// the secondary screen (percentage 0–100, 0 = off). Persists and pushes it.
   Future<void> updateFanartDimLevel(int percent) async {
     final clamped = percent.clamp(0, 100);
     _config = _config.copyWith(fanartDimLevel: clamped);
@@ -283,8 +263,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Persists the secondary app-dock slot assignments (one package name per
-  /// slot, empty string = free) and pushes them to the secondary display.
   Future<void> updateDockApps(List<String> apps) async {
     final normalized = ConfigModel.normalizeDock(apps);
     _config = _config.copyWith(dockApps: normalized);
@@ -293,8 +271,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Enables or disables the secondary Now Playing app dock. Persists and
-  /// pushes the value to the secondary display.
   Future<void> updateDockEnabled(bool enabled) async {
     _config = _config.copyWith(dockEnabled: enabled);
     await SqliteConfigService.saveConfig(_config);
@@ -302,9 +278,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Sets how many secondary dock slots are visible, clamped to
-  /// [ConfigModel.dockMinSlotCount]–[ConfigModel.dockMaxSlotCount]. Persists and
-  /// pushes the value to the secondary display.
   Future<void> updateDockSlotCount(int count) async {
     final clamped = count.clamp(
       ConfigModel.dockMinSlotCount,
@@ -335,7 +308,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Updates the sorting criteria for the system list.
   Future<void> updateSystemSortBy(String sortBy) async {
     if (_config.systemSortBy == sortBy) return;
     _config = _config.copyWith(systemSortBy: sortBy);
@@ -344,7 +316,6 @@ extension SqliteConfigMutators on SqliteConfigProvider {
     _notify();
   }
 
-  /// Updates the sorting direction (ascending or descending) for the system list.
   Future<void> updateSystemSortOrder(String order) async {
     if (_config.systemSortOrder == order) return;
     _config = _config.copyWith(systemSortOrder: order);
