@@ -21,6 +21,29 @@ function Invoke-Checked {
     }
 }
 
+function Get-RelativePathCompat {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$TargetPath
+    )
+
+    # System.IO.Path.GetRelativePath is unavailable in Windows PowerShell 5.1
+    # (.NET Framework). Fort only needs relative paths for descendants of the
+    # repository/dist roots, so use a deterministic prefix calculation that
+    # works in both PowerShell 5.1 and newer PowerShell versions.
+    $baseFull = [IO.Path]::GetFullPath($BasePath).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    ) + [IO.Path]::DirectorySeparatorChar
+    $targetFull = [IO.Path]::GetFullPath($TargetPath)
+
+    if ($targetFull.StartsWith($baseFull, [StringComparison]::OrdinalIgnoreCase)) {
+        return $targetFull.Substring($baseFull.Length)
+    }
+
+    return $targetFull
+}
+
 function Get-NativeVersionText {
     param([Parameter(Mandatory = $true)][string]$Executable)
 
@@ -235,7 +258,9 @@ if (-not $SkipTests) {
         $TestFiles = @(
             Get-ChildItem (Join-Path $RepoRoot "test") -Recurse -File -Filter "*_test.dart" |
                 Where-Object { $WindowsIncompatibleTests -notcontains $_.Name } |
-                ForEach-Object { [IO.Path]::GetRelativePath($RepoRoot, $_.FullName) }
+                ForEach-Object {
+                    Get-RelativePathCompat -BasePath $RepoRoot -TargetPath $_.FullName
+                }
         )
 
         Write-Host "Windows host: excluding upstream Linux/POSIX-only test files:"
@@ -310,7 +335,7 @@ git diff "58e94a65788a800db8805d622fa88dc8bf485877..HEAD" --stat | Set-Content (
 
 $Hashes = Get-ChildItem $DistRoot -File -Recurse | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
     $hash = Get-FileHash $_.FullName -Algorithm SHA256
-    $relative = [IO.Path]::GetRelativePath($DistRoot, $_.FullName).Replace('\', '/')
+    $relative = (Get-RelativePathCompat -BasePath $DistRoot -TargetPath $_.FullName).Replace('\', '/')
     "$($hash.Hash.ToLowerInvariant())  $relative"
 }
 $Hashes | Set-Content (Join-Path $DistRoot "SHA256SUMS.txt") -Encoding ASCII
