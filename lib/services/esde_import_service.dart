@@ -596,8 +596,5 @@ class EsdeImportService {
     XmlNode doc,
     String esdeRoot,
     String esdeDirName,
-  ) => _selectGames(
-    doc,
-    path.join(esdeRoot, 'downloaded_media', esdeDirName),
-  );
+  ) => _selectGames(doc, path.join(esdeRoot, 'downloaded_media', esdeDirName));
 }
