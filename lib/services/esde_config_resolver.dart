@@ -55,7 +55,7 @@ class EsdeResolvedConfig {
   });
 
   String get mediaRoot =>
-      settings.mediaDirectory ?? path.join(esdeRoot, 'downloaded_media');
+      settings.mediaDirectory ?? path.posix.join(esdeRoot, 'downloaded_media');
 
   /// Resolves the effective ES-DE paths for [systemName].
   ///
@@ -69,9 +69,9 @@ class EsdeResolvedConfig {
         customRomPath ??
         (settings.romDirectory == null
             ? null
-            : path.join(settings.romDirectory!, normalizedName));
+            : path.posix.join(settings.romDirectory!, normalizedName));
 
-    final standardGamelist = path.join(
+    final standardGamelist = path.posix.join(
       esdeRoot,
       'gamelists',
       normalizedName,
@@ -79,7 +79,7 @@ class EsdeResolvedConfig {
     );
     final romGamelist = romPath == null
         ? null
-        : path.join(romPath, 'gamelist.xml');
+        : path.posix.join(romPath, 'gamelist.xml');
 
     final candidates = <String>[];
     // When ES-DE legacy gamelist mode is enabled the ROM-local file is the
@@ -97,7 +97,7 @@ class EsdeResolvedConfig {
     return EsdeSystemPaths(
       systemName: normalizedName,
       romDirectory: romPath,
-      mediaDirectory: path.join(mediaRoot, normalizedName),
+      mediaDirectory: path.posix.join(mediaRoot, normalizedName),
       gamelistCandidates: List.unmodifiable(candidates),
     );
   }
@@ -115,12 +115,12 @@ class EsdeConfigResolver {
   const EsdeConfigResolver._();
 
   static Future<EsdeResolvedConfig> load(String esdeRoot) async {
-    final normalizedRoot = path.normalize(esdeRoot);
+    final normalizedRoot = path.posix.normalize(esdeRoot);
     final settingsFile = File(
-      path.join(normalizedRoot, 'settings', 'es_settings.xml'),
+      path.posix.join(normalizedRoot, 'settings', 'es_settings.xml'),
     );
     final customSystemsFile = File(
-      path.join(normalizedRoot, 'custom_systems', 'es_systems.xml'),
+      path.posix.join(normalizedRoot, 'custom_systems', 'es_systems.xml'),
     );
 
     final settings = settingsFile.existsSync()
@@ -218,6 +218,6 @@ class EsdeConfigResolver {
     if (value == null) return null;
     final trimmed = value.trim();
     if (trimmed.isEmpty) return null;
-    return path.normalize(trimmed);
+    return path.posix.normalize(trimmed.replaceAll('\\', '/'));
   }
 }
