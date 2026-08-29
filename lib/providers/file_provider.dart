@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:neostation/services/config_service.dart';
 import 'package:neostation/services/esde_config_resolver.dart';
+import 'package:neostation/services/fort_system_path_service.dart';
 import 'package:neostation/services/logger_service.dart';
 
 /// Provider responsible for abstracting filesystem access across Android and Desktop platforms.
@@ -23,16 +24,17 @@ class FileProvider extends ChangeNotifier {
   bool _isInitialized = false;
   Map<String, Set<String>> _systemExtensions = {};
 
-  /// ES-DE application root selected by the user.
   String? _esdeRoot;
 
-  /// NeoStation system folder -> absolute ES-DE media directory for that
-  /// system. Fort resolves this through ES-DE's MediaDirectory setting rather
-  /// than assuming `<ES-DE>/downloaded_media`.
+  /// NeoStation system folder -> absolute automatically resolved ES-DE media
+  /// directory for that system.
   Map<String, String> _esdeSystemMediaPaths = {};
 
-  /// "systemFolder\u0000romBase" -> ES-DE media subfolder mirrored from the
-  /// ROM's relative directory inside its system.
+  /// NeoStation system folder -> Fort manual media root. A manual value wins
+  /// over ES-DE automatic resolution, but NeoStation-owned scraped artwork
+  /// remains the first display source as in upstream.
+  Map<String, String> _manualSystemMediaPaths = {};
+
   Map<String, String> _esdeMediaSubdirs = {};
 
   static String _esdeSubdirKey(String systemFolder, String romBase) =>
@@ -123,34 +125,9 @@ class FileProvider extends ChangeNotifier {
   }
 
   static const Set<String> _commonRomExts = {
-    'zip',
-    '7z',
-    'rar',
-    'iso',
-    'bin',
-    'cue',
-    'chd',
-    'nes',
-    'sfc',
-    'smc',
-    'gba',
-    'gbc',
-    'gb',
-    'n64',
-    'z64',
-    'v64',
-    'nds',
-    '3ds',
-    'cia',
-    'nsp',
-    'xci',
-    'nca',
-    'nro',
-    'nso',
-    'rvz',
-    'wbfs',
-    'gcm',
-    'rpx',
+    'zip', '7z', 'rar', 'iso', 'bin', 'cue', 'chd', 'nes', 'sfc', 'smc',
+    'gba', 'gbc', 'gb', 'n64', 'z64', 'v64', 'nds', '3ds', 'cia', 'nsp',
+    'xci', 'nca', 'nro', 'nso', 'rvz', 'wbfs', 'gcm', 'rpx',
   };
 
   static String stripRomExtension(
@@ -158,67 +135,33 @@ class FileProvider extends ChangeNotifier {
     Set<String>? validExtensions,
   ]) {
     if (!romName.contains('.')) return romName;
-
     final lastDot = romName.lastIndexOf('.');
     final ext = romName.substring(lastDot + 1).toLowerCase();
-
     if (validExtensions != null && validExtensions.contains(ext)) {
       return romName.substring(0, lastDot);
     }
-
     final isVersion =
         RegExp(r'^\d+$').hasMatch(ext) || RegExp(r'^v\d+').hasMatch(ext);
     if (isVersion) return romName;
-
-    if (_commonRomExts.contains(ext)) {
-      return romName.substring(0, lastDot);
-    }
-
-    if (ext.length <= 4 && !ext.contains(' ')) {
-      return romName.substring(0, lastDot);
-    }
-
+    if (_commonRomExts.contains(ext)) return romName.substring(0, lastDot);
+    if (ext.length <= 4 && !ext.contains(' ')) return romName.substring(0, lastDot);
     return romName;
   }
 
   String getVideoPath(String systemFolderName, String romName) {
     final baseName = _stripRomExtension(romName, systemFolderName);
-
     if (!_isInitialized || _mediaPath == null) {
-      return path.join(
-        mediaFolder,
-        systemFolderName,
-        videosFolder,
-        '$baseName.mp4',
-      );
+      return path.join(mediaFolder, systemFolderName, videosFolder, '$baseName.mp4');
     }
-    return path.join(
-      _mediaPath!,
-      mediaFolder,
-      systemFolderName,
-      videosFolder,
-      '$baseName.mp4',
-    );
+    return path.join(_mediaPath!, mediaFolder, systemFolderName, videosFolder, '$baseName.mp4');
   }
 
   String getScreenshotPath(String systemFolderName, String romName) {
     final baseName = _stripRomExtension(romName, systemFolderName);
-
     if (!_isInitialized || _mediaPath == null) {
-      return path.join(
-        mediaFolder,
-        systemFolderName,
-        screenshotsFolder,
-        '$baseName.png',
-      );
+      return path.join(mediaFolder, systemFolderName, screenshotsFolder, '$baseName.png');
     }
-    return path.join(
-      _mediaPath!,
-      mediaFolder,
-      systemFolderName,
-      screenshotsFolder,
-      '$baseName.png',
-    );
+    return path.join(_mediaPath!, mediaFolder, systemFolderName, screenshotsFolder, '$baseName.png');
   }
 
   String getMediaPath(
@@ -228,47 +171,27 @@ class FileProvider extends ChangeNotifier {
     String extension,
   ) {
     final baseName = _stripRomExtension(romName, systemFolderName);
-
     if (!_isInitialized || _mediaPath == null) {
-      return path.join(
-        mediaFolder,
-        systemFolderName,
-        imageType,
-        '$baseName.$extension',
-      );
+      return path.join(mediaFolder, systemFolderName, imageType, '$baseName.$extension');
     }
-    return path.join(
-      _mediaPath!,
-      mediaFolder,
-      systemFolderName,
-      imageType,
-      '$baseName.$extension',
-    );
+    return path.join(_mediaPath!, mediaFolder, systemFolderName, imageType, '$baseName.$extension');
   }
 
   String getAbsolutePath(String relativePath) {
-    if (!_isInitialized || _userDataPath == null) {
-      return path.join(userDataFolder, relativePath);
-    }
+    if (!_isInitialized || _userDataPath == null) return path.join(userDataFolder, relativePath);
     return path.join(_userDataPath!, relativePath);
   }
 
   String getRomPath(String systemFolderName, String romName) {
     if (!_isInitialized || _userDataPath == null) {
-      return path.join(
-        userDataFolder,
-        'roms',
-        systemFolderName,
-        '$romName.zip',
-      );
+      return path.join(userDataFolder, 'roms', systemFolderName, '$romName.zip');
     }
     return path.join(_userDataPath!, 'roms', systemFolderName, '$romName.zip');
   }
 
   Future<bool> fileExists(String filePath) async {
     try {
-      final file = File(filePath);
-      return await file.exists();
+      return await File(filePath).exists();
     } catch (e) {
       _log.e('Error checking file existence $filePath: $e');
       return false;
@@ -278,23 +201,16 @@ class FileProvider extends ChangeNotifier {
   Future<void> ensureDirectoryExists(String filePath) async {
     try {
       final directory = Directory(path.dirname(filePath));
-      if (!await directory.exists()) {
-        await directory.create(recursive: true);
-      }
+      if (!await directory.exists()) await directory.create(recursive: true);
     } catch (e) {
       _log.e('Error creating directory for $filePath: $e');
     }
   }
 
-  Future<List<FileSystemEntity>> getFilesInDirectory(
-    String directoryPath,
-  ) async {
+  Future<List<FileSystemEntity>> getFilesInDirectory(String directoryPath) async {
     try {
       final directory = Directory(directoryPath);
-      if (await directory.exists()) {
-        return await directory.list().toList();
-      }
-      return [];
+      return await directory.exists() ? await directory.list().toList() : [];
     } catch (e) {
       _log.e('Error listing files in $directoryPath: $e');
       return [];
@@ -304,10 +220,7 @@ class FileProvider extends ChangeNotifier {
   Future<int> getFileSize(String filePath) async {
     try {
       final file = File(filePath);
-      if (await file.exists()) {
-        return await file.length();
-      }
-      return 0;
+      return await file.exists() ? await file.length() : 0;
     } catch (e) {
       _log.e('Error getting file size $filePath: $e');
       return 0;
@@ -317,8 +230,7 @@ class FileProvider extends ChangeNotifier {
   Future<bool> copyFile(String sourcePath, String destinationPath) async {
     try {
       await ensureDirectoryExists(destinationPath);
-      final sourceFile = File(sourcePath);
-      await sourceFile.copy(destinationPath);
+      await File(sourcePath).copy(destinationPath);
       return true;
     } catch (e) {
       _log.e('Error copying file $sourcePath to $destinationPath: $e');
@@ -340,37 +252,27 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  String getDocumentsPath() {
-    return _documentsPath ?? Directory.current.path;
-  }
-
-  String getAppDirectoryPath() {
-    return _userDataPath ?? userDataFolder;
-  }
+  String getDocumentsPath() => _documentsPath ?? Directory.current.path;
+  String getAppDirectoryPath() => _userDataPath ?? userDataFolder;
 
   String getMediaDirectoryPath() {
-    if (!_isInitialized || _mediaPath == null) {
-      return mediaFolder;
-    }
+    if (!_isInitialized || _mediaPath == null) return mediaFolder;
     return path.join(_mediaPath!, mediaFolder);
   }
 
-  /// Loads ES-DE fallback configuration and resolves each persisted ES-DE
-  /// system name to its effective absolute media directory.
   Future<void> _loadEsdeConfig() async {
     try {
+      final overrides = await FortSystemPathService.loadAll(forceReload: true);
+      _manualSystemMediaPaths = {
+        for (final entry in overrides.entries)
+          if (entry.value.mediaDirectory != null)
+            entry.key: entry.value.mediaDirectory!,
+      };
+
       final db = await SqliteService.getDatabase();
-      final cfg = await db.query(
-        'user_config',
-        columns: ['esde_folder_path'],
-        limit: 1,
-      );
-      final rootRaw = cfg.isNotEmpty
-          ? cfg.first['esde_folder_path']?.toString()
-          : null;
-      _esdeRoot = (rootRaw != null && rootRaw.trim().isNotEmpty)
-          ? rootRaw.trim()
-          : null;
+      final cfg = await db.query('user_config', columns: ['esde_folder_path'], limit: 1);
+      final rootRaw = cfg.isNotEmpty ? cfg.first['esde_folder_path']?.toString() : null;
+      _esdeRoot = (rootRaw != null && rootRaw.trim().isNotEmpty) ? rootRaw.trim() : null;
 
       final map = <String, String>{};
       if (_esdeRoot != null) {
@@ -403,18 +305,17 @@ class FileProvider extends ChangeNotifier {
           final fn = r['folder_name']?.toString();
           final file = r['filename']?.toString();
           final sub = r['subdir']?.toString();
-          if (fn == null || file == null || sub == null || sub.isEmpty) {
-            continue;
-          }
+          if (fn == null || file == null || sub == null || sub.isEmpty) continue;
           final base = _stripRomExtension(file, fn);
           subdirs[_esdeSubdirKey(fn, base)] = sub;
         }
       }
       _esdeMediaSubdirs = subdirs;
     } catch (e) {
-      _log.e('FileProvider: failed to load ES-DE configuration: $e');
+      _log.e('FileProvider: failed to load external media configuration: $e');
       _esdeRoot = null;
       _esdeSystemMediaPaths = {};
+      _manualSystemMediaPaths = {};
       _esdeMediaSubdirs = {};
     }
   }
@@ -424,40 +325,40 @@ class FileProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Candidate read-time fallback paths for a media asset inside the effective
-  /// ES-DE media directory for this system. Does not check existence.
   List<String> getEsdeMediaCandidates(
     String systemFolderName,
     String imageType,
     String romName, [
     List<String>? extensions,
   ]) {
-    if (_esdeRoot == null) return const [];
-    final systemMediaPath = _esdeSystemMediaPaths[systemFolderName];
+    final manualPath = _manualSystemMediaPaths[systemFolderName.toLowerCase()];
+    final systemMediaPath = manualPath ?? _esdeSystemMediaPaths[systemFolderName];
     if (systemMediaPath == null) return const [];
-    final categories = _esdeMediaCategories[imageType];
-    if (categories == null) return const [];
+
+    final mapped = _esdeMediaCategories[imageType];
+    if (mapped == null) return const [];
+    final categories = manualPath == null
+        ? mapped
+        : <String>{imageType, ...mapped}.toList();
+
     final baseName = _stripRomExtension(romName, systemFolderName);
-    final subdir =
-        _esdeMediaSubdirs[_esdeSubdirKey(systemFolderName, baseName)];
+    final subdir = _esdeMediaSubdirs[_esdeSubdirKey(systemFolderName, baseName)];
     final subdirs = <String>[
       if (subdir != null && subdir.isNotEmpty) subdir,
       '',
     ];
-
     final extList = extensions ?? _esdeMediaExtensions;
+
     final candidates = <String>[];
     for (final category in categories) {
       for (final sub in subdirs) {
         for (final extension in extList) {
-          candidates.add(
-            path.joinAll([
-              systemMediaPath,
-              category,
-              if (sub.isNotEmpty) sub,
-              '$baseName.$extension',
-            ]),
-          );
+          candidates.add(path.joinAll([
+            systemMediaPath,
+            category,
+            if (sub.isNotEmpty) sub,
+            '$baseName.$extension',
+          ]));
         }
       }
     }
@@ -465,12 +366,7 @@ class FileProvider extends ChangeNotifier {
   }
 
   List<String> getEsdeVideoCandidates(String systemFolderName, String romName) {
-    return getEsdeMediaCandidates(
-      systemFolderName,
-      'videos',
-      romName,
-      _esdeVideoExtensions,
-    );
+    return getEsdeMediaCandidates(systemFolderName, 'videos', romName, _esdeVideoExtensions);
   }
 
   void reset() {
@@ -479,6 +375,7 @@ class FileProvider extends ChangeNotifier {
     _documentsPath = null;
     _esdeRoot = null;
     _esdeSystemMediaPaths = {};
+    _manualSystemMediaPaths = {};
     _esdeMediaSubdirs = {};
     _isInitialized = false;
     notifyListeners();
