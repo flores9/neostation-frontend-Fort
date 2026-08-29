@@ -23,6 +23,8 @@ val hasReleaseSigning = listOf(
 }
 
 android {
+    // Keep the upstream namespace so native source packages and method-channel
+    // wiring remain compatible; only the installable application ID is forked.
     namespace = "com.neogamelab.neostation"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -44,11 +46,10 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.neogamelab.neostation"
-        manifestPlaceholders["appName"] = "NeoStation"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Fort is intentionally installable alongside upstream NeoStation.
+        // This also isolates app-private user data and avoids signature clashes.
+        applicationId = "com.neogamelab.neostation.fort"
+        manifestPlaceholders["appName"] = "NeoStation Fort"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
