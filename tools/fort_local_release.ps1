@@ -21,6 +21,38 @@ function Invoke-Checked {
     }
 }
 
+function Find-Java17Home {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if ($env:JAVA_HOME) {
+        $candidates.Add($env:JAVA_HOME)
+    }
+
+    $candidates.Add("C:\Program Files\Android\Android Studio\jbr")
+    $candidates.Add((Join-Path $env:LOCALAPPDATA "Programs\Android Studio\jbr"))
+
+    foreach ($root in @("C:\Program Files\Eclipse Adoptium", "C:\Program Files\Java")) {
+        if (Test-Path $root) {
+            Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '17' } |
+                ForEach-Object { $candidates.Add($_.FullName) }
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $javaExe = Join-Path $candidate "bin\java.exe"
+        if (-not (Test-Path $javaExe)) { continue }
+
+        $versionText = (& $javaExe -version 2>&1 | Out-String)
+        if ($versionText -match 'version\s+"17\.' -or $versionText -match 'openjdk\s+17\.') {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    return $null
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
 
@@ -52,50 +84,87 @@ if ($Dirty) {
 $FvmConfig = Get-Content ".fvmrc" -Raw | ConvertFrom-Json
 $RequiredFlutter = [string]$FvmConfig.flutter
 
-$FlutterCommand = $null
+# Match upstream Android CI: JDK 17. Reuse JAVA_HOME, Android Studio's bundled
+# JBR or a normal JDK 17 installation without changing machine-wide settings.
+$Java17Home = Find-Java17Home
+if ($Java17Home) {
+    $env:JAVA_HOME = $Java17Home
+    $env:Path = "$(Join-Path $Java17Home 'bin');$env:Path"
+    Write-Host "Java 17: $Java17Home"
+} else {
+    throw "JDK 17 was not found. Install Temurin 17 (for example: winget install EclipseAdoptium.Temurin.17.JDK), reopen PowerShell, and rerun this same command."
+}
+
+$FlutterMode = $null
+$FlutterExe = $null
+$DartExe = $null
+
 if (Get-Command fvm -ErrorAction SilentlyContinue) {
-    $FlutterCommand = "fvm"
+    $FlutterMode = "fvm"
     Invoke-Checked "Install/select Flutter $RequiredFlutter with FVM" {
         & fvm install $RequiredFlutter
         if ($LASTEXITCODE -ne 0) { return }
         & fvm use $RequiredFlutter --force
     }
 } elseif (Get-Command flutter -ErrorAction SilentlyContinue) {
-    $FlutterCommand = "flutter"
-    Write-Warning "FVM is not installed. The script will use Flutter from PATH; verify it is $RequiredFlutter."
+    $FlutterMode = "path"
+    $FlutterExe = (Get-Command flutter).Source
+    $dartCommand = Get-Command dart -ErrorAction SilentlyContinue
+    if ($dartCommand) { $DartExe = $dartCommand.Source }
+    Write-Warning "FVM is not installed. The script will use Flutter from PATH; the exact version will be verified below."
 } else {
-    throw "Flutter was not found. Install FVM (recommended) or Flutter $RequiredFlutter and reopen PowerShell."
+    # First-machine bootstrap. Keep the SDK outside the repository so `git status`
+    # stays clean and future Fort releases can reuse the same pinned toolchain.
+    $SdkParent = Join-Path $env:USERPROFILE ".fort\flutter"
+    $SdkRoot = Join-Path $SdkParent $RequiredFlutter
+    $FlutterExe = Join-Path $SdkRoot "bin\flutter.bat"
+    $DartExe = Join-Path $SdkRoot "bin\dart.bat"
+
+    if (-not (Test-Path $FlutterExe)) {
+        if (Test-Path $SdkRoot) {
+            Remove-Item $SdkRoot -Recurse -Force
+        }
+        New-Item $SdkParent -ItemType Directory -Force | Out-Null
+        Invoke-Checked "Bootstrap Flutter $RequiredFlutter from the official Git tag" {
+            & git clone --branch $RequiredFlutter --depth 1 https://github.com/flutter/flutter.git $SdkRoot
+        }
+    } else {
+        Write-Host "Reusing local Fort Flutter SDK: $SdkRoot"
+    }
+
+    $FlutterMode = "local"
 }
 
 function Invoke-Flutter {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    if ($FlutterCommand -eq "fvm") {
+    if ($FlutterMode -eq "fvm") {
         & fvm flutter @Args
     } else {
-        & flutter @Args
+        & $FlutterExe @Args
     }
 }
 
 function Invoke-Dart {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    if ($FlutterCommand -eq "fvm") {
+    if ($FlutterMode -eq "fvm") {
         & fvm dart @Args
+    } elseif ($DartExe -and (Test-Path $DartExe)) {
+        & $DartExe @Args
     } elseif (Get-Command dart -ErrorAction SilentlyContinue) {
         & dart @Args
     } else {
-        throw "Dart was not found in PATH. Install FVM (recommended) or expose the Dart binary bundled with Flutter."
+        throw "Dart was not found next to the selected Flutter SDK."
     }
 }
 
 Invoke-Checked "Flutter version" { Invoke-Flutter --version }
+$ActualFlutterVersion = (Invoke-Flutter --version --machine | ConvertFrom-Json).frameworkVersion
+if ($ActualFlutterVersion -ne $RequiredFlutter) {
+    throw "Flutter version mismatch. Required $RequiredFlutter, found $ActualFlutterVersion."
+}
 
-$Java = Get-Command java -ErrorAction SilentlyContinue
-if (-not $Java) {
-    if ($env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME "bin\java.exe"))) {
-        $env:Path = "$(Join-Path $env:JAVA_HOME 'bin');$env:Path"
-    } else {
-        throw "Java was not found. Install/configure JDK 17 and set JAVA_HOME."
-    }
+if ($FlutterMode -eq "local") {
+    Invoke-Checked "Precache Android Flutter artifacts" { Invoke-Flutter precache --android }
 }
 
 $KeyProperties = Join-Path $RepoRoot "android\key.properties"
@@ -109,10 +178,12 @@ New-Item $DistRoot -ItemType Directory -Force | Out-Null
 $Logs = Join-Path $DistRoot "logs"
 New-Item $Logs -ItemType Directory -Force | Out-Null
 
-Invoke-Checked "Flutter dependencies" { Invoke-Flutter pub get }
+# Match upstream CI: never silently rewrite a lock file during a release build.
+Invoke-Checked "Flutter dependencies" { Invoke-Flutter pub get --enforce-lockfile }
 
+# Match upstream CI: formatting is checked across the repository, not only lib/test.
 Invoke-Checked "Dart formatting check" {
-    Invoke-Dart format --output=none --set-exit-if-changed lib test
+    Invoke-Dart format --output=none --set-exit-if-changed .
 }
 
 if (-not $SkipAnalyze) {
@@ -153,6 +224,8 @@ Release: $ReleaseName
 Branch: $Branch
 Commit: $Commit
 Flutter required: $RequiredFlutter
+Flutter mode: $FlutterMode
+JAVA_HOME: $env:JAVA_HOME
 Generated: $((Get-Date).ToString('o'))
 Signing config present: $(Test-Path $KeyProperties)
 Skip tests: $SkipTests
