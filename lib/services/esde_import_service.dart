@@ -8,32 +8,16 @@ import 'package:xml/xml.dart';
 import '../data/datasources/sqlite_service.dart';
 import '../repositories/scraper_repository.dart';
 import 'esde_config_resolver.dart';
+import 'fort_system_path_service.dart';
 import 'logger_service.dart';
 
-/// Summary of an ES-DE import run, surfaced to the settings UI.
 class EsdeImportResult {
-  /// Number of ES-DE system folders matched to a NeoStation system.
   final int systemsMatched;
-
-  /// Number of ES-DE system folders that could not be mapped and were skipped.
   final int systemsUnmatched;
-
-  /// Number of ES-DE system folders that mapped to a NeoStation system but
-  /// whose `gamelist.xml` could not be read or parsed (skipped).
   final int systemsSkipped;
-
-  /// Number of `<game>` entries whose metadata was created or filled.
   final int gamesImported;
-
-  /// Number of `<game>` entries with no matching scanned ROM (skipped).
   final int gamesUnmatched;
-
-  /// Number of games whose favorite / play-stat fields were updated.
   final int statsUpdated;
-
-  /// Whether at least one usable ES-DE gamelist source was found. Historically
-  /// this meant a central `gamelists/` directory existed; Fort broadens the
-  /// meaning so ROM-local gamelists are valid ES-DE sources too.
   final bool gamelistsDirFound;
 
   const EsdeImportResult({
@@ -70,29 +54,20 @@ class _EsdeGamelistSource {
   final String esdeSystemName;
   final File file;
   final String mediaDirectory;
+  final bool manual;
 
   const _EsdeGamelistSource({
     required this.esdeSystemName,
     required this.file,
     required this.mediaDirectory,
+    this.manual = false,
   });
 }
 
-/// Imports metadata and wires up fallback artwork from an ES-DE
-/// (EmulationStation Desktop Edition) installation.
-///
-/// Fort resolves ES-DE's actual configuration instead of assuming all data is
-/// under `<ES-DE>/gamelists` and `<ES-DE>/downloaded_media`. The importer reads
-/// `settings/es_settings.xml` plus `custom_systems/es_systems.xml`, supports
-/// ROM-local gamelists and custom per-system ROM paths, and honours an external
-/// `MediaDirectory`. ES-DE files remain read-only; later NeoStation scrapes are
-/// still written to NeoStation's own media directory.
+/// Imports metadata and wires up read-only fallback artwork from ES-DE.
 class EsdeImportService {
   static final _log = LoggerService.instance;
 
-  /// Runs the import against [esdeRoot] (the ES-DE application folder).
-  ///
-  /// [onProgress] is invoked as `(fraction 0..1, currentSystemLabel)`.
   static Future<EsdeImportResult> import(
     String esdeRoot, {
     void Function(double progress, String label)? onProgress,
@@ -104,7 +79,7 @@ class EsdeImportService {
     final sources = await _discoverGamelists(resolved);
     if (sources.isEmpty) {
       _log.w(
-        'ES-DE import: no central or ROM-local gamelist.xml found at $esdeRoot',
+        'ES-DE import: no central, ROM-local or manual gamelist.xml found at $esdeRoot',
       );
       return const EsdeImportResult(gamelistsDirFound: false);
     }
@@ -112,6 +87,7 @@ class EsdeImportService {
     final importedDirs = <String>{};
     final preferredLang = await ScraperRepository.getPreferredLanguage();
     final descColumn = _descriptionColumn(preferredLang);
+    final systemsWithManualGamelist = <String>{};
 
     for (var i = 0; i < sources.length; i++) {
       final source = sources[i];
@@ -130,6 +106,15 @@ class EsdeImportService {
       }
 
       final appSystemId = system['app_system_id']!;
+      if (!source.manual && systemsWithManualGamelist.contains(appSystemId)) {
+        _log.i(
+          'ES-DE import: automatic gamelist for "$esdeDirName" skipped '
+          'because a Fort manual gamelist already won for $appSystemId',
+        );
+        continue;
+      }
+      if (source.manual) systemsWithManualGamelist.add(appSystemId);
+
       final matchedBefore = result.systemsMatched;
       result = await _importSystem(
         esdeDirName: esdeDirName,
@@ -166,13 +151,8 @@ class EsdeImportService {
     return result;
   }
 
-  /// Discovers gamelists from every ES-DE location Fort understands.
-  ///
-  /// Candidate system names come from the modern central gamelist tree, ES-DE
-  /// custom-system paths, and NeoStation's known primary/alias folder names.
-  /// The last source is what lets a global `ROMDirectory` expose legacy
-  /// `<ROMDirectory>/<system>/gamelist.xml` files even when no central gamelist
-  /// exists. Each system then uses [EsdeResolvedConfig.forSystem]'s priority.
+  /// Discovers gamelists with manual per-system overrides first, then ES-DE's
+  /// own central/custom/ROM-local candidates.
   static Future<List<_EsdeGamelistSource>> _discoverGamelists(
     EsdeResolvedConfig resolved,
   ) async {
@@ -188,8 +168,6 @@ class EsdeImportService {
 
     names.addAll(resolved.customSystemRomPaths.keys);
 
-    // Include all primary and alias folder names so a ROM-local gamelist can be
-    // discovered under the global ROMDirectory without guessing system names.
     try {
       final db = await SqliteService.getDatabase();
       final rows = await db.rawQuery('''
@@ -206,6 +184,29 @@ class EsdeImportService {
     }
 
     final deduped = <String, _EsdeGamelistSource>{};
+    final overrides = await FortSystemPathService.loadAll();
+    for (final entry in overrides.entries) {
+      final manualGamelist = entry.value.gamelistFile;
+      if (manualGamelist == null || manualGamelist.trim().isEmpty) continue;
+      final file = File(manualGamelist.trim());
+      if (!file.existsSync()) {
+        _log.w(
+          'Fort manual gamelist for ${entry.key} is unavailable: ${file.path}',
+        );
+        continue;
+      }
+      final auto = resolved.forSystem(entry.key);
+      final media = entry.value.mediaDirectory ?? auto.mediaDirectory;
+      final canonical = path.normalize(file.path).toLowerCase();
+      deduped[canonical] = _EsdeGamelistSource(
+        esdeSystemName: entry.key,
+        file: file,
+        mediaDirectory: media,
+        manual: true,
+      );
+      names.add(entry.key);
+    }
+
     for (final name in names) {
       final paths = resolved.forSystem(name);
       final gamelist = paths.firstExistingGamelist;
@@ -216,20 +217,21 @@ class EsdeImportService {
         () => _EsdeGamelistSource(
           esdeSystemName: name,
           file: File(gamelist),
-          mediaDirectory: paths.mediaDirectory,
+          mediaDirectory:
+              overrides[name.toLowerCase()]?.mediaDirectory ??
+              paths.mediaDirectory,
         ),
       );
     }
 
     final sources = deduped.values.toList()
-      ..sort((a, b) => a.esdeSystemName.compareTo(b.esdeSystemName));
+      ..sort((a, b) {
+        if (a.manual != b.manual) return a.manual ? -1 : 1;
+        return a.esdeSystemName.compareTo(b.esdeSystemName);
+      });
     return sources;
   }
 
-  /// Clears all ES-DE-imported data so the import can be re-run from scratch.
-  /// Deletes only metadata rows the ES-DE import itself created
-  /// (`esde_imported = 1`) that a later NeoStation scrape hasn't upgraded
-  /// (`is_fully_scraped = 0`) — never NeoStation's own partially-scraped rows.
   static Future<int> reset() async {
     final db = await SqliteService.getDatabase();
     final deleted = await db.delete(
@@ -243,7 +245,6 @@ class EsdeImportService {
     return deleted;
   }
 
-  /// Links artwork for systems that have media but no gamelist.
   static Future<void> _linkMediaOnlySystems(
     EsdeResolvedConfig resolved,
     Set<String> importedDirs,
@@ -251,6 +252,7 @@ class EsdeImportService {
     final mediaRoot = Directory(resolved.mediaRoot);
     if (!mediaRoot.existsSync()) return;
 
+    final overrides = await FortSystemPathService.loadAll();
     for (final dir in mediaRoot.listSync().whereType<Directory>()) {
       final esdeDirName = path.basename(dir.path);
       if (importedDirs.contains(esdeDirName.toLowerCase())) continue;
@@ -260,10 +262,12 @@ class EsdeImportService {
       );
       if (system == null) continue;
 
+      final effectiveMedia =
+          overrides[esdeDirName.toLowerCase()]?.mediaDirectory ?? dir.path;
       await _recordEsdeMediaDir(
         esdeDirName,
         system['app_system_id']!,
-        mediaDirectory: dir.path,
+        mediaDirectory: effectiveMedia,
       );
       _log.i(
         'ES-DE import: linked art-only system "$esdeDirName" '
@@ -328,10 +332,6 @@ class EsdeImportService {
       final filename = path.basename(normalizedPath);
       final mediaSubdir = _mediaSubdir(normalizedPath);
 
-      // Metadata is still merged only for ROMs NeoStation has already scanned.
-      // Fort's per-system ROM-path integration makes those scans ES-DE-aware;
-      // keeping this join prevents a metadata import from manufacturing games
-      // that are not actually accessible to NeoStation.
       final rom = romsByName[filename.toLowerCase()];
       if (rom == null) {
         result = result._add(gamesUnmatched: 1);
@@ -420,9 +420,6 @@ class EsdeImportService {
     return result;
   }
 
-  /// Persists the ES-DE system directory name used to resolve media. The value
-  /// remains a logical name (for backward compatibility); [FileProvider]
-  /// combines it with the current ES-DE MediaDirectory at read time.
   static Future<void> _recordEsdeMediaDir(
     String esdeDirName,
     String appSystemId, {
@@ -496,8 +493,6 @@ class EsdeImportService {
     }
   }
 
-  /// De-duplicates a gamelist's entries by ROM filename, preferring the entry
-  /// whose mirrored ES-DE media subfolder actually contains artwork.
   static List<XmlElement> _selectGames(
     XmlNode doc,
     String systemMediaDirectory,
@@ -588,8 +583,6 @@ class EsdeImportService {
     final t = el.innerText.trim();
     return t.isEmpty ? null : t;
   }
-
-  // ── Test seams ──────────────────────────────────────────────────────────
 
   @visibleForTesting
   static double? parseRatingForTest(String? raw) => _parseRating(raw);
