@@ -230,7 +230,7 @@ xcuserdata/
 *.xcscmblueprint
 *.xccheckout
 
-## compatibility with Xcode 3 and earlier (ignoring not required starting Xcode 4)
+## compatibility with Xcode 3 and earlier (ignoring not required starting with Xcode 4)
 build/
 DerivedData/
 *.moved-aside
@@ -241,7 +241,6 @@ DerivedData/
 *.mode2v3
 !default.mode2v3
 *.perspectivev3
-!default.perspectivev3
 
 
 ### https://raw.github.com/github/gitignore/80a8803b004013d17291196825a327b9e871f009/Global/VisualStudioCode.gitignore
@@ -298,3 +297,7 @@ ROMs/
 
 # Native build scratch from the vendored packages (never committed)
 .cxx/
+
+# NeoStation Fort local release/test artifacts
+/dist/
+/fort-test-output.txt
