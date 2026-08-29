@@ -7,6 +7,7 @@ import 'package:xml/xml.dart';
 
 import '../data/datasources/sqlite_service.dart';
 import '../repositories/scraper_repository.dart';
+import 'esde_config_resolver.dart';
 import 'logger_service.dart';
 
 /// Summary of an ES-DE import run, surfaced to the settings UI.
@@ -30,8 +31,9 @@ class EsdeImportResult {
   /// Number of games whose favorite / play-stat fields were updated.
   final int statsUpdated;
 
-  /// Whether a `gamelists/` directory was found under the picked folder. When
-  /// false, the selected folder is almost certainly not an ES-DE installation.
+  /// Whether at least one usable ES-DE gamelist source was found. Historically
+  /// this meant a central `gamelists/` directory existed; Fort broadens the
+  /// meaning so ROM-local gamelists are valid ES-DE sources too.
   final bool gamelistsDirFound;
 
   const EsdeImportResult({
@@ -64,21 +66,31 @@ class EsdeImportResult {
   }
 }
 
+class _EsdeGamelistSource {
+  final String esdeSystemName;
+  final File file;
+  final String mediaDirectory;
+
+  const _EsdeGamelistSource({
+    required this.esdeSystemName,
+    required this.file,
+    required this.mediaDirectory,
+  });
+}
+
 /// Imports metadata and wires up fallback artwork from an ES-DE
 /// (EmulationStation Desktop Edition) installation.
 ///
-/// Metadata is parsed from `gamelists/<system>/gamelist.xml` and merged into
-/// NeoStation's `user_screenscraper_metadata` on a fill-gaps-only basis (never
-/// clobbering existing NeoStation-scraped values). Artwork is NOT copied: the
-/// ES-DE folder path plus a per-system `esde_media_dir` are persisted so
-/// [FileProvider] can resolve `downloaded_media/` files as read-time fallback
-/// (a later NeoStation scrape lands in NeoStation's own media folder and takes
-/// precedence automatically).
+/// Fort resolves ES-DE's actual configuration instead of assuming all data is
+/// under `<ES-DE>/gamelists` and `<ES-DE>/downloaded_media`. The importer reads
+/// `settings/es_settings.xml` plus `custom_systems/es_systems.xml`, supports
+/// ROM-local gamelists and custom per-system ROM paths, and honours an external
+/// `MediaDirectory`. ES-DE files remain read-only; later NeoStation scrapes are
+/// still written to NeoStation's own media directory.
 class EsdeImportService {
   static final _log = LoggerService.instance;
 
-  /// Runs the import against [esdeRoot] (the ES-DE application folder that
-  /// contains `gamelists/` and `downloaded_media/`).
+  /// Runs the import against [esdeRoot] (the ES-DE application folder).
   ///
   /// [onProgress] is invoked as `(fraction 0..1, currentSystemLabel)`.
   static Future<EsdeImportResult> import(
@@ -88,26 +100,23 @@ class EsdeImportService {
     var result = const EsdeImportResult();
     _mediaIndexCache.clear();
 
-    final gamelistsDir = Directory(path.join(esdeRoot, 'gamelists'));
-    if (!gamelistsDir.existsSync()) {
-      _log.w('ES-DE import: no gamelists/ dir at $esdeRoot');
+    final resolved = await EsdeConfigResolver.load(esdeRoot);
+    final sources = await _discoverGamelists(resolved);
+    if (sources.isEmpty) {
+      _log.w(
+        'ES-DE import: no central or ROM-local gamelist.xml found at $esdeRoot',
+      );
       return const EsdeImportResult(gamelistsDirFound: false);
     }
-
-    final systemDirs = gamelistsDir
-        .listSync()
-        .whereType<Directory>()
-        .where((d) => File(path.join(d.path, 'gamelist.xml')).existsSync())
-        .toList();
 
     final importedDirs = <String>{};
     final preferredLang = await ScraperRepository.getPreferredLanguage();
     final descColumn = _descriptionColumn(preferredLang);
 
-    for (var i = 0; i < systemDirs.length; i++) {
-      final systemDir = systemDirs[i];
-      final esdeDirName = path.basename(systemDir.path);
-      onProgress?.call(i / systemDirs.length, esdeDirName);
+    for (var i = 0; i < sources.length; i++) {
+      final source = sources[i];
+      final esdeDirName = source.esdeSystemName;
+      onProgress?.call(i / sources.length, esdeDirName);
 
       final system = await ScraperRepository.resolveSystemByFolderName(
         esdeDirName,
@@ -121,35 +130,31 @@ class EsdeImportService {
       }
 
       final appSystemId = system['app_system_id']!;
-
-      // systemsMatched / systemsSkipped are tallied inside _importSystem so a
-      // system with an unreadable gamelist.xml counts as skipped, not matched.
       final matchedBefore = result.systemsMatched;
       result = await _importSystem(
-        esdeRoot: esdeRoot,
         esdeDirName: esdeDirName,
         appSystemId: appSystemId,
-        gamelistFile: File(path.join(systemDir.path, 'gamelist.xml')),
+        gamelistFile: source.file,
+        mediaDirectory: source.mediaDirectory,
         descColumn: descColumn,
         accumulator: result,
-        // Big systems can hold thousands of entries, so report progress
-        // within the system too rather than freezing the bar on its name.
         onGameProgress: onProgress == null
             ? null
             : (fraction) =>
-                  onProgress((i + fraction) / systemDirs.length, esdeDirName),
+                  onProgress((i + fraction) / sources.length, esdeDirName),
       );
 
-      // Only wire up the read-time media fallback for systems that actually
-      // imported (a corrupt/unparseable gamelist.xml is skipped, not matched);
-      // otherwise we'd record an esde_media_dir with no matching metadata rows.
       if (result.systemsMatched > matchedBefore) {
-        await _recordEsdeMediaDir(esdeRoot, esdeDirName, appSystemId);
+        await _recordEsdeMediaDir(
+          esdeDirName,
+          appSystemId,
+          mediaDirectory: source.mediaDirectory,
+        );
         importedDirs.add(esdeDirName.toLowerCase());
       }
     }
 
-    await _linkMediaOnlySystems(esdeRoot, importedDirs);
+    await _linkMediaOnlySystems(resolved, importedDirs);
 
     onProgress?.call(1.0, '');
     _log.i(
@@ -161,16 +166,70 @@ class EsdeImportService {
     return result;
   }
 
+  /// Discovers gamelists from every ES-DE location Fort understands.
+  ///
+  /// Candidate system names come from the modern central gamelist tree, ES-DE
+  /// custom-system paths, and NeoStation's known primary/alias folder names.
+  /// The last source is what lets a global `ROMDirectory` expose legacy
+  /// `<ROMDirectory>/<system>/gamelist.xml` files even when no central gamelist
+  /// exists. Each system then uses [EsdeResolvedConfig.forSystem]'s priority.
+  static Future<List<_EsdeGamelistSource>> _discoverGamelists(
+    EsdeResolvedConfig resolved,
+  ) async {
+    final names = <String>{};
+    final central = Directory(path.join(resolved.esdeRoot, 'gamelists'));
+    if (central.existsSync()) {
+      for (final dir in central.listSync().whereType<Directory>()) {
+        if (File(path.join(dir.path, 'gamelist.xml')).existsSync()) {
+          names.add(path.basename(dir.path));
+        }
+      }
+    }
+
+    names.addAll(resolved.customSystemRomPaths.keys);
+
+    // Include all primary and alias folder names so a ROM-local gamelist can be
+    // discovered under the global ROMDirectory without guessing system names.
+    try {
+      final db = await SqliteService.getDatabase();
+      final rows = await db.rawQuery('''
+        SELECT folder_name FROM app_systems
+        UNION
+        SELECT folder_name FROM app_system_folders
+      ''');
+      for (final row in rows) {
+        final name = row['folder_name']?.toString().trim();
+        if (name != null && name.isNotEmpty) names.add(name);
+      }
+    } catch (e) {
+      _log.w('ES-DE import: could not enumerate system aliases: $e');
+    }
+
+    final deduped = <String, _EsdeGamelistSource>{};
+    for (final name in names) {
+      final paths = resolved.forSystem(name);
+      final gamelist = paths.firstExistingGamelist;
+      if (gamelist == null) continue;
+      final canonical = path.normalize(gamelist).toLowerCase();
+      deduped.putIfAbsent(
+        canonical,
+        () => _EsdeGamelistSource(
+          esdeSystemName: name,
+          file: File(gamelist),
+          mediaDirectory: paths.mediaDirectory,
+        ),
+      );
+    }
+
+    final sources = deduped.values.toList()
+      ..sort((a, b) => a.esdeSystemName.compareTo(b.esdeSystemName));
+    return sources;
+  }
+
   /// Clears all ES-DE-imported data so the import can be re-run from scratch.
   /// Deletes only metadata rows the ES-DE import itself created
   /// (`esde_imported = 1`) that a later NeoStation scrape hasn't upgraded
-  /// (`is_fully_scraped = 0`) — never NeoStation's own partially-scraped rows,
-  /// which also sit at `is_fully_scraped = 0`. Clears every system's
-  /// `esde_media_dir` so the read-time media fallback stops. The selected ES-DE
-  /// folder path lives in `user_config` / SqliteConfigProvider and is cleared by
-  /// the caller (so the cached config and UI update too); favorites /
-  /// last-played are left untouched (indistinguishable from the user's own).
-  /// Returns the number of metadata rows removed.
+  /// (`is_fully_scraped = 0`) — never NeoStation's own partially-scraped rows.
   static Future<int> reset() async {
     final db = await SqliteService.getDatabase();
     final deleted = await db.delete(
@@ -184,20 +243,12 @@ class EsdeImportService {
     return deleted;
   }
 
-  /// Wires up the artwork fallback for ES-DE systems that have a
-  /// `downloaded_media/<system>/` tree but no `gamelists/<system>/gamelist.xml`
-  /// — a normal state in ES-DE (media survives a gamelist the user deleted, and
-  /// some systems are scraped for art without ever being played).
-  ///
-  /// There is no metadata to import for these, but their art is perfectly
-  /// usable: recording `esde_media_dir` lets [FileProvider] resolve it for any
-  /// ROM NeoStation has scanned. Without this the whole system's art is
-  /// invisible even though the files are right there.
+  /// Links artwork for systems that have media but no gamelist.
   static Future<void> _linkMediaOnlySystems(
-    String esdeRoot,
+    EsdeResolvedConfig resolved,
     Set<String> importedDirs,
   ) async {
-    final mediaRoot = Directory(path.join(esdeRoot, 'downloaded_media'));
+    final mediaRoot = Directory(resolved.mediaRoot);
     if (!mediaRoot.existsSync()) return;
 
     for (final dir in mediaRoot.listSync().whereType<Directory>()) {
@@ -210,9 +261,9 @@ class EsdeImportService {
       if (system == null) continue;
 
       await _recordEsdeMediaDir(
-        esdeRoot,
         esdeDirName,
         system['app_system_id']!,
+        mediaDirectory: dir.path,
       );
       _log.i(
         'ES-DE import: linked art-only system "$esdeDirName" '
@@ -222,25 +273,17 @@ class EsdeImportService {
   }
 
   static Future<EsdeImportResult> _importSystem({
-    required String esdeRoot,
     required String esdeDirName,
     required String appSystemId,
     required File gamelistFile,
+    required String mediaDirectory,
     required String descColumn,
     required EsdeImportResult accumulator,
     void Function(double fraction)? onGameProgress,
   }) async {
     var result = accumulator;
-    // Parsed as a fragment, not a document: when the user picks a non-default
-    // emulator for a system, ES-DE writes an `<alternativeEmulator>` element as
-    // a SECOND root alongside `<gameList>`. That is invalid XML which ES-DE's
-    // own (lenient) parser accepts, and `XmlDocument.parse` rejects outright
-    // with "Unexpected root element" — silently skipping every such system.
     XmlDocumentFragment doc;
     try {
-      // Decoded leniently: gamelist.xml is declared UTF-8 but ES-DE happily
-      // writes whatever bytes a scraper handed it, and a single bad byte in
-      // one <desc> would otherwise throw away the whole system's metadata.
       doc = XmlDocumentFragment.parse(
         utf8.decode(await gamelistFile.readAsBytes(), allowMalformed: true),
       );
@@ -248,15 +291,9 @@ class EsdeImportService {
       _log.e('ES-DE import: failed to parse ${gamelistFile.path}: $e');
       return result._add(systemsSkipped: 1);
     }
-    // gamelist.xml read and parsed: this system counts as matched.
     result = result._add(systemsMatched: 1);
 
     final db = await SqliteService.getDatabase();
-
-    // Both tables are read once per system and indexed case-insensitively in
-    // memory. Querying per `<game>` instead costs two round-trips per entry,
-    // which on a large library is tens of thousands of queries on the UI
-    // isolate — the single biggest cost of an import.
     final romsByName = <String, Map<String, Object?>>{};
     for (final row in await db.query(
       'user_roms',
@@ -279,47 +316,33 @@ class EsdeImportService {
       metaByName.putIfAbsent(name.toLowerCase(), () => row);
     }
 
-    // Writes go out as one batch per system rather than one implicit
-    // transaction (and fsync) per game.
     final batch = db.batch();
-
-    final games = _selectGames(doc, esdeRoot, esdeDirName);
+    final games = _selectGames(doc, mediaDirectory);
     for (var g = 0; g < games.length; g++) {
       if (g % 100 == 0) onGameProgress?.call(g / games.length);
       final game = games[g];
       final rawPath = _text(game, 'path');
       if (rawPath == null || rawPath.isEmpty) continue;
 
-      // `<hidden>true</hidden>` is deliberately NOT honoured: hiding a game in
-      // ES-DE says nothing about whether the user wants it in NeoStation, and
-      // silently dropping it makes the import look broken to anyone who has
-      // forgotten what they hid. NeoStation has its own hidden-game handling.
       final normalizedPath = rawPath.replaceAll('\\', '/');
       final filename = path.basename(normalizedPath);
-      // ES-DE mirrors the ROM's subfolder (relative to the system's ROM dir)
-      // inside downloaded_media, e.g. `<sys>/covers/<subdir>/<base>.png`. Capture
-      // that subdir (empty when the ROM sits directly in the system folder) so
-      // the read-time fallback can find nested artwork.
       final mediaSubdir = _mediaSubdir(normalizedPath);
 
-      // Only import for ROMs NeoStation has already scanned.
+      // Metadata is still merged only for ROMs NeoStation has already scanned.
+      // Fort's per-system ROM-path integration makes those scans ES-DE-aware;
+      // keeping this join prevents a metadata import from manufacturing games
+      // that are not actually accessible to NeoStation.
       final rom = romsByName[filename.toLowerCase()];
       if (rom == null) {
         result = result._add(gamesUnmatched: 1);
         continue;
       }
 
-      // The gamelist basename can differ in case from the scanned ROM filename.
-      // Match happens case-insensitively above, but metadata is written and
-      // later joined case-sensitively (user_roms.filename = metadata.filename),
-      // so key everything on the actual scanned filename to avoid orphaning the
-      // imported row and its media subdir.
       final canonicalFilename =
           (rom['filename'] as String?)?.trim().isNotEmpty == true
           ? rom['filename'] as String
           : filename;
 
-      // --- Metadata (fill-gaps merge into user_screenscraper_metadata) ---
       final esdeMeta = <String, dynamic>{
         'real_name': _text(game, 'name'),
         descColumn: _text(game, 'desc'),
@@ -358,7 +381,6 @@ class EsdeImportService {
         result = result._add(gamesImported: 1);
       }
 
-      // --- Favorites / play stats (fill-gaps into user_roms) ---
       final favorite = _flag(game, 'favorite');
       final lastPlayed = _parseEsdeDateTime(_text(game, 'lastplayed'));
       final update = <String, dynamic>{};
@@ -375,9 +397,6 @@ class EsdeImportService {
         update['last_played'] = lastPlayed.toIso8601String();
       }
 
-      // ES-DE's `<playtime>` is in seconds, same unit as user_roms.play_time.
-      // Only fill when NeoStation has never timed this ROM, so an import can
-      // never overwrite (or double-count onto) time the user accrued here.
       final esdePlayTime = int.tryParse(_text(game, 'playtime') ?? '');
       final curPlayTime =
           int.tryParse(rom['play_time']?.toString() ?? '0') ?? 0;
@@ -401,19 +420,16 @@ class EsdeImportService {
     return result;
   }
 
-  /// Persists which ES-DE `downloaded_media` subfolder backs a NeoStation
-  /// system so read-time fallback can resolve artwork. Prefers a folder that
-  /// actually contains a `downloaded_media/<dir>` tree; otherwise only sets it
-  /// when not already populated.
+  /// Persists the ES-DE system directory name used to resolve media. The value
+  /// remains a logical name (for backward compatibility); [FileProvider]
+  /// combines it with the current ES-DE MediaDirectory at read time.
   static Future<void> _recordEsdeMediaDir(
-    String esdeRoot,
     String esdeDirName,
-    String appSystemId,
-  ) async {
+    String appSystemId, {
+    required String mediaDirectory,
+  }) async {
     final db = await SqliteService.getDatabase();
-    final hasMedia = Directory(
-      path.join(esdeRoot, 'downloaded_media', esdeDirName),
-    ).existsSync();
+    final hasMedia = Directory(mediaDirectory).existsSync();
 
     final existing = await db.query(
       'user_system_settings',
@@ -444,17 +460,12 @@ class EsdeImportService {
     }
   }
 
-  /// Maps a preferred language code to a `user_screenscraper_metadata`
-  /// description column, defaulting to English when unsupported.
   static String _descriptionColumn(String lang) {
     const supported = {'en', 'es', 'fr', 'de', 'it', 'pt'};
     final code = lang.toLowerCase();
     return supported.contains(code) ? 'description_$code' : 'description_en';
   }
 
-  /// ES-DE stores rating as a 0..1 float string; NeoStation stores it on
-  /// ScreenScraper's 0..20 scale (displayed as `rating / 2` out of 10), so
-  /// scale the ES-DE value up by 20.
   static double? _parseRating(String? raw) {
     if (raw == null || raw.trim().isEmpty) return null;
     final v = double.tryParse(raw.trim());
@@ -462,9 +473,6 @@ class EsdeImportService {
     return v.clamp(0.0, 1.0) * 20.0;
   }
 
-  /// Parses ES-DE's basic ISO datetime (`yyyyMMddTHHmmss`, e.g.
-  /// `19950311T000000`) into a [DateTime]. Returns null on failure or
-  /// placeholder/zero dates.
   static DateTime? _parseEsdeDateTime(String? raw) {
     if (raw == null) return null;
     final s = raw.trim();
@@ -488,23 +496,11 @@ class EsdeImportService {
     }
   }
 
-  /// Extracts the ES-DE media subfolder from a gamelist `<path>` — the ROM's
-  /// directory relative to the system folder, with a leading `./` stripped.
-  /// Returns `''` when the ROM sits directly in the system folder.
-  /// De-duplicates a gamelist's `<game>` entries by ROM filename.
-  ///
-  /// ES-DE can list the same filename in several subfolders of one system
-  /// (e.g. a base ROM plus copies under `Hacks/`, `Translations/`, or
-  /// `All but the Best (…)/`). They all collapse onto a single NeoStation
-  /// metadata row keyed by `(app_system_id, filename)`, so importing every one
-  /// makes them fight over `esde_media_subdir` on each run (the churn behind the
-  /// "N games imported" count never dropping to zero). Keep one entry per
-  /// filename, preferring whichever subfolder actually holds downloaded media so
-  /// the artwork fallback resolves correctly; otherwise keep the first seen.
+  /// De-duplicates a gamelist's entries by ROM filename, preferring the entry
+  /// whose mirrored ES-DE media subfolder actually contains artwork.
   static List<XmlElement> _selectGames(
     XmlNode doc,
-    String esdeRoot,
-    String esdeDirName,
+    String systemMediaDirectory,
   ) {
     final chosen = <String, XmlElement>{};
     for (final game in doc.findAllElements('game')) {
@@ -524,20 +520,20 @@ class EsdeImportService {
         (_text(existing, 'path') ?? '').replaceAll('\\', '/'),
       );
       final newSubdir = _mediaSubdir(normalized);
-      if (!_esdeMediaExists(esdeRoot, esdeDirName, filename, existingSubdir) &&
-          _esdeMediaExists(esdeRoot, esdeDirName, filename, newSubdir)) {
+      if (!_esdeMediaExists(
+            systemMediaDirectory,
+            filename,
+            existingSubdir,
+          ) &&
+          _esdeMediaExists(systemMediaDirectory, filename, newSubdir)) {
         chosen[key] = game;
       }
     }
     return chosen.values.toList();
   }
 
-  /// Whether any `downloaded_media/<system>/<category>/<subdir>/` folder holds a
-  /// file whose name (sans extension) matches [filename]'s base — i.e. ES-DE
-  /// scraped artwork for this ROM under [subdir].
   static bool _esdeMediaExists(
-    String esdeRoot,
-    String esdeDirName,
+    String systemMediaDirectory,
     String filename,
     String subdir,
   ) {
@@ -550,23 +546,12 @@ class EsdeImportService {
       'marquees',
       'fanart',
     ]) {
-      final dir = path.join(
-        esdeRoot,
-        'downloaded_media',
-        esdeDirName,
-        category,
-        subdir,
-      );
+      final dir = path.join(systemMediaDirectory, category, subdir);
       if (_mediaIndex(dir).contains(base)) return true;
     }
     return false;
   }
 
-  /// Extension-less, lowercased names of the files directly in [dir].
-  ///
-  /// Cached for the duration of an import: duplicate ROM names are checked
-  /// against the same handful of media folders over and over, and each miss
-  /// would otherwise re-list the whole directory from storage.
   static final Map<String, Set<String>> _mediaIndexCache = {};
 
   static Set<String> _mediaIndex(String dir) {
@@ -594,8 +579,6 @@ class EsdeImportService {
     return dir.startsWith('/') ? dir.substring(1) : dir;
   }
 
-  /// Reads an ES-DE boolean metadata tag (`<favorite>`, `<hidden>`, …).
-  /// ES-DE writes these as the literal strings `true` / `false`.
   static bool _flag(XmlElement parent, String tag) =>
       _text(parent, tag)?.toLowerCase() == 'true';
 
@@ -607,8 +590,6 @@ class EsdeImportService {
   }
 
   // ── Test seams ──────────────────────────────────────────────────────────
-  // Thin wrappers so unit tests can exercise the pure parsing/selection logic
-  // without going through a full on-disk import.
 
   @visibleForTesting
   static double? parseRatingForTest(String? raw) => _parseRating(raw);
@@ -624,7 +605,6 @@ class EsdeImportService {
   @visibleForTesting
   static List<XmlElement> selectGamesForTest(
     XmlNode doc,
-    String esdeRoot,
-    String esdeDirName,
-  ) => _selectGames(doc, esdeRoot, esdeDirName);
+    String systemMediaDirectory,
+  ) => _selectGames(doc, systemMediaDirectory);
 }
