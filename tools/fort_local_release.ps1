@@ -217,7 +217,34 @@ if (-not $SkipAnalyze) {
 }
 
 if (-not $SkipTests) {
-    Invoke-Checked "Flutter tests" { Invoke-Flutter test }
+    if ($env:OS -eq "Windows_NT") {
+        # Upstream's authoritative PR test job runs on ubuntu-latest. A small
+        # set of unchanged upstream tests is intentionally POSIX/Linux-specific
+        # (chmod, Linux executable names, symlinks and POSIX separator asserts)
+        # and cannot be evaluated faithfully by the Windows Dart VM. Exclude
+        # only those host-specific files; every remaining upstream test plus all
+        # Fort/ES-DE tests still gates the local Android build.
+        $WindowsIncompatibleTests = @(
+            "artwork_cache_test.dart",
+            "launcher_service_linux_hints_test.dart",
+            "linux_emulator_discovery_test.dart",
+            "retroarch_linux_config_discovery_test.dart",
+            "rom_scan_symlink_alias_test.dart",
+            "storage_space_service_test.dart"
+        )
+        $TestFiles = Get-ChildItem (Join-Path $RepoRoot "test") -Recurse -File -Filter "*_test.dart" |
+            Where-Object { $WindowsIncompatibleTests -notcontains $_.Name } |
+            ForEach-Object { $_.FullName }
+
+        Write-Host "Windows host: excluding upstream Linux/POSIX-only test files:"
+        $WindowsIncompatibleTests | ForEach-Object { Write-Host "  - $_" }
+        Write-Host "Running $($TestFiles.Count) host-compatible test files (including all Fort tests)."
+        Invoke-Checked "Flutter tests (Windows host-compatible gate)" {
+            Invoke-Flutter test @TestFiles
+        }
+    } else {
+        Invoke-Checked "Flutter tests" { Invoke-Flutter test }
+    }
 }
 
 Invoke-Checked "Build Android ARM64 release APK" {
@@ -256,6 +283,7 @@ Generated: $((Get-Date).ToString('o'))
 Signing config present: $(Test-Path $KeyProperties)
 Skip tests: $SkipTests
 Skip analyze: $SkipAnalyze
+Windows host-aware test exclusions: $($env:OS -eq "Windows_NT")
 "@
 Set-Content (Join-Path $DistRoot "BUILD_MANIFEST.txt") $Manifest -Encoding UTF8
 
