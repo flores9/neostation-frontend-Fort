@@ -10,19 +10,15 @@ import '../models/system_model.dart';
 import '../models/config_model.dart';
 import '../models/emulator_model.dart';
 import '../repositories/system_repository.dart';
+import 'esde_config_resolver.dart';
+import 'fort_system_path_service.dart';
+import 'saf_directory_service.dart';
 
 /// Service responsible for managing application paths, file I/O for configurations,
 /// and discovery of emulation systems and standalone emulators.
-///
-/// Provides platform-agnostic abstractions for directory resolution across
-/// Windows, Android, Linux, and macOS.
 class ConfigService {
   static final _log = LoggerService.instance;
 
-  /// Determines the base execution path for Windows installations.
-  ///
-  /// In development mode (`flutter run`), it targets the project root.
-  /// In production mode, it targets the directory containing the executable (portable behavior).
   static String _getWindowsBasePath() {
     final exePath = Platform.resolvedExecutable;
     if (exePath.contains(r'build\windows') ||
@@ -36,51 +32,26 @@ class ConfigService {
   static const Duration _androidStorageRetryDelay = Duration(seconds: 3);
   static const int _androidStorageMaxAttempts = 20;
 
-  /// In-flight Android cold-boot wait, shared by every concurrent caller so the
-  /// retry loop runs once instead of once per consumer.
   static Future<String>? _androidStorageWait;
-
-  /// Set when the retry loop has already given up on [_unavailableStoragePath].
-  /// Later callers then fail fast instead of each blocking for another full
-  /// timeout — `getUserDataPath()` has a dozen call sites, and serialising
-  /// their waits used to stall startup for minutes.
   static bool _androidStorageUnavailable = false;
   static String? _unavailableStoragePath;
-
-  /// Session-only opt-out: the user explicitly chose to continue with the
-  /// platform default location after the configured volume never appeared.
   static bool _useDefaultPathFallback = false;
 
-  /// Whether the configured user-data volume was declared unreachable this
-  /// session. UI may use this to explain the state instead of silently
-  /// presenting an empty library.
   static bool get storageUnavailable => _androidStorageUnavailable;
-
-  /// The configured path that [storageUnavailable] refers to, if any.
   static String? get unavailableStoragePath => _unavailableStoragePath;
 
-  /// Clears the cached "unavailable" verdict so the next resolution retries
-  /// from scratch. Call after the configured path changes or when the user
-  /// asks to retry.
   static void resetStorageAvailability() {
     _androidStorageUnavailable = false;
     _unavailableStoragePath = null;
     _useDefaultPathFallback = false;
   }
 
-  /// Abandons the configured custom path for the remainder of this session and
-  /// resolves to the platform default instead. This is the user's explicit
-  /// escape hatch from an unmountable volume; it is deliberately not persisted.
   static void continueWithDefaultUserDataPath() {
     _log.w('User opted to continue with the default user-data path');
     _androidStorageUnavailable = false;
     _useDefaultPathFallback = true;
   }
 
-  /// Resolves the user-data path once, up front, so the cold-boot wait happens
-  /// while a loading UI is visible rather than piecemeal inside later callers.
-  ///
-  /// Returns false when the configured volume never became available.
   static Future<bool> ensureUserDataStorageReady() async {
     try {
       await getUserDataPath();
@@ -91,10 +62,6 @@ class ConfigService {
     }
   }
 
-  /// Resolves the absolute path to the user's local data directory.
-  ///
-  /// Checks for a user-configured custom path first (stored in SharedPreferences).
-  /// Falls back to the platform default if no custom path is set.
   static Future<String> getUserDataPath() async {
     final prefs = await SharedPreferences.getInstance();
     final customPath = prefs.getString(_customPathKey);
@@ -102,28 +69,18 @@ class ConfigService {
         customPath.isNotEmpty &&
         !_useDefaultPathFallback) {
       final dir = Directory(customPath);
-      if (await dir.exists()) {
-        return customPath;
-      }
+      if (await dir.exists()) return customPath;
 
       if (Platform.isAndroid) {
-        // A default launcher can start while the removable volume containing
-        // the user data is still mounting. Falling back to the app-private
-        // default here creates a second, empty database and makes the whole
-        // app look freshly installed. Wait for the configured volume instead.
         if (_androidStorageUnavailable &&
             _unavailableStoragePath == customPath) {
           throw StateError(
             'Configured user-data storage is unavailable: $customPath',
           );
         }
-
         return _androidStorageWait ??= _startAndroidStorageWait(customPath);
       }
 
-      // Directory missing — try to create it (first-run on new device or new location).
-      // On desktop, falling back keeps the application usable when a removable
-      // custom path has genuinely been removed.
       try {
         await dir.create(recursive: true);
         return customPath;
@@ -138,10 +95,6 @@ class ConfigService {
     return getDefaultUserDataPath();
   }
 
-  /// Runs the Android cold-boot retry loop for [customPath] and clears the
-  /// shared in-flight slot once it settles. A success does not need caching —
-  /// the `exists()` check in [getUserDataPath] is cheap — while a failure is
-  /// remembered via [_androidStorageUnavailable] so later callers fail fast.
   static Future<String> _startAndroidStorageWait(String customPath) {
     final wait = _waitForAndroidStorage(customPath);
     unawaited(
@@ -152,21 +105,14 @@ class ConfigService {
     return wait;
   }
 
-  /// Waits for the volume holding [customPath] to appear, creating the final
-  /// directory only once its parent volume is mounted. Throws a [StateError]
-  /// (and latches [storageUnavailable]) when it never shows up.
   static Future<String> _waitForAndroidStorage(String customPath) async {
     final dir = Directory(customPath);
     for (var attempt = 1; attempt <= _androidStorageMaxAttempts; attempt++) {
       if (await dir.exists()) return customPath;
-
-      // A missing last directory is safe to create only once its parent
-      // volume is available. Do not create a lookalike path before that.
       if (await dir.parent.exists()) {
         await dir.create(recursive: true);
         return customPath;
       }
-
       if (attempt < _androidStorageMaxAttempts) {
         _log.i(
           'Waiting for custom user-data storage ($attempt/$_androidStorageMaxAttempts): $customPath',
@@ -182,22 +128,15 @@ class ConfigService {
     );
   }
 
-  /// Returns the platform default user-data path, ignoring any custom override.
   static Future<String> getDefaultUserDataPath() async {
     return _computeDefaultUserDataPath();
   }
 
-  /// Platform-specific strategies:
-  /// - Android: Application-specific external storage (`/Android/data/.../files/user-data`).
-  /// - macOS: Standard application support directory (`~/Library/Application Support/...`).
-  /// - Linux: AppImage-aware persistence or `~/.neostation`.
-  /// - Windows: Portable directory relative to the binary.
   static Future<String> _computeDefaultUserDataPath() async {
     if (Platform.isAndroid) {
       final externalDir = await getExternalStorageDirectory();
       final dir = externalDir ?? await getApplicationDocumentsDirectory();
       final userDataPath = path.join(dir.path, 'user-data');
-
       final userDataDir = Directory(userDataPath);
       if (!await userDataDir.exists()) {
         try {
@@ -212,17 +151,12 @@ class ConfigService {
       return path.join(directory.path, 'user-data');
     } else {
       String basePath;
-
       if (Platform.isLinux) {
         final executable = Platform.resolvedExecutable;
         if (executable.contains('/.mount_') ||
             executable.endsWith('.AppImage')) {
           final home = Platform.environment['HOME'];
-          if (home != null) {
-            basePath = path.join(home, '.neostation');
-          } else {
-            basePath = Directory.current.path;
-          }
+          basePath = home != null ? path.join(home, '.neostation') : Directory.current.path;
         } else {
           basePath = Directory.current.path;
         }
@@ -237,53 +171,125 @@ class ConfigService {
       } else {
         basePath = _getWindowsBasePath();
       }
-
       return path.join(basePath, 'user-data');
     }
   }
 
-  /// Retrieves the user's home directory path, bypassing sandbox limitations on macOS.
   static String getRealHomePath() {
     if (Platform.isMacOS) {
       final user = Platform.environment['USER'];
-      if (user != null && user.isNotEmpty) {
-        return '/Users/$user';
-      }
+      if (user != null && user.isNotEmpty) return '/Users/$user';
     }
     return Platform.environment['HOME'] ?? '';
   }
 
-  /// Replaces logical placeholders (e.g., `{HOME}`, `{USERPROFILE}`) within a path string
-  /// with their corresponding absolute filesystem paths.
   static String resolvePath(String pathStr) {
     if (pathStr.isEmpty) return pathStr;
-
     String resolved = pathStr;
-
     if (resolved.contains('{HOME}')) {
       resolved = resolved.replaceFirst('{HOME}', getRealHomePath());
     }
-
     if (resolved.contains('{USERPROFILE}')) {
       resolved = resolved.replaceFirst(
         '{USERPROFILE}',
         Platform.environment['USERPROFILE'] ?? getRealHomePath(),
       );
     }
-
     return resolved;
   }
 
-  /// Resolves the absolute path for storing media assets (thumbnails, videos).
+  /// Returns the exact Fort/ES-DE ROM directory for [system], if one should
+  /// override NeoStation's global ROM-root discovery.
   ///
-  /// When a custom user-data path is set, media always lives inside it at `media/`.
-  /// Otherwise falls back to platform-specific defaults.
+  /// Priority is manual Fort override, then explicit ES-DE custom-system path,
+  /// then an existing path derived from ES-DE ROMDirectory. An explicit custom
+  /// path is returned even while its volume is unavailable so the scanner can
+  /// preserve stored rows instead of silently falling back and pruning them.
+  static Future<String?> getFortSystemRomDirectory(
+    SystemModel system, {
+    String? esdeRoot,
+  }) async {
+    final manual = await FortSystemPathService.getForSystem(system.folderName);
+    if (manual.romDirectory != null) return manual.romDirectory;
+
+    final root = esdeRoot?.trim();
+    if (root == null || root.isEmpty) return null;
+
+    try {
+      final resolved = await EsdeConfigResolver.load(root);
+      final names = <String>{system.folderName, ...system.folders};
+
+      for (final name in names) {
+        final explicit = resolved.customSystemRomPaths[name.toLowerCase()];
+        if (explicit != null && explicit.isNotEmpty) return explicit;
+      }
+
+      if (resolved.settings.romDirectory != null) {
+        for (final name in names) {
+          final candidate = resolved.forSystem(name).romDirectory;
+          if (candidate != null && await _pathExists(candidate)) {
+            return candidate;
+          }
+        }
+      }
+    } catch (e) {
+      _log.w('Fort ROM path resolution failed for ${system.folderName}: $e');
+    }
+    return null;
+  }
+
+  /// Whether Fort has any configured per-system ROM source at all. Used to
+  /// prevent NeoStation's empty-global-root "fast scan" from skipping ES-DE
+  /// systems that are intentionally configured by exact path.
+  static Future<bool> hasFortRomSources({String? esdeRoot}) async {
+    final overrides = await FortSystemPathService.loadAll();
+    if (overrides.values.any((v) => v.romDirectory != null)) return true;
+
+    final root = esdeRoot?.trim();
+    if (root == null || root.isEmpty) return false;
+    try {
+      final resolved = await EsdeConfigResolver.load(root);
+      return resolved.customSystemRomPaths.isNotEmpty ||
+          resolved.settings.romDirectory != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Checks the exact source before allowing a scan that could prune database
+  /// rows. An inaccessible path is different from an accessible empty folder.
+  static Future<bool> isFortRomDirectoryAccessible(String directory) async {
+    if (directory.startsWith('content://')) {
+      if (!Platform.isAndroid) return false;
+      try {
+        return await SafDirectoryService.hasPermission(directory);
+      } catch (_) {
+        return false;
+      }
+    }
+    return _pathExists(directory);
+  }
+
+  static Future<bool> _pathExists(String candidate) async {
+    if (candidate.startsWith('content://')) {
+      if (!Platform.isAndroid) return false;
+      try {
+        return await SafDirectoryService.hasPermission(candidate);
+      } catch (_) {
+        return false;
+      }
+    }
+    try {
+      return await Directory(candidate).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<String> getMediaPath() async {
     if (Platform.isAndroid) {
-      // On Android getUserDataPath() already handles the custom override.
       final userDataPath = await getUserDataPath();
       final mediaPath = path.join(userDataPath, 'media');
-
       final mediaDir = Directory(mediaPath);
       if (!await mediaDir.exists()) {
         try {
@@ -297,7 +303,6 @@ class ConfigService {
       final directory = await getApplicationDocumentsDirectory();
       return path.join(directory.path, 'media');
     } else {
-      // Check custom path first — media lives inside it when overridden.
       final prefs = await SharedPreferences.getInstance();
       final customPath = prefs.getString(_customPathKey);
       if (customPath != null && customPath.isNotEmpty) {
@@ -305,17 +310,11 @@ class ConfigService {
       }
 
       String basePath;
-
       if (Platform.isLinux) {
         final executable = Platform.resolvedExecutable;
-        if (executable.contains('/.mount_') ||
-            executable.endsWith('.AppImage')) {
+        if (executable.contains('/.mount_') || executable.endsWith('.AppImage')) {
           final home = Platform.environment['HOME'];
-          if (home != null) {
-            basePath = path.join(home, '.neostation');
-          } else {
-            basePath = Directory.current.path;
-          }
+          basePath = home != null ? path.join(home, '.neostation') : Directory.current.path;
         } else {
           basePath = Directory.current.path;
         }
@@ -331,24 +330,20 @@ class ConfigService {
         basePath = _getWindowsBasePath();
         return path.join(basePath, 'user-data', 'media');
       }
-
       return path.join(basePath, 'media');
     }
   }
 
-  /// Returns the path to the application's global JSON configuration file.
   static Future<String> getConfigFilePath() async {
     final userDataPath = await getUserDataPath();
     return path.join(userDataPath, 'config.json');
   }
 
-  /// Returns the path to the current session log file.
   static Future<String> getLogFilePath() async {
     final userDataPath = await getUserDataPath();
     return path.join(userDataPath, 'app.log');
   }
 
-  /// Deserializes the application configuration from the local `config.json` file.
   static Future<ConfigModel> loadConfig() async {
     try {
       final configPath = await getConfigFilePath();
@@ -356,8 +351,7 @@ class ConfigService {
       if (await file.exists()) {
         final content = await file.readAsString();
         final json = jsonDecode(content) as Map<String, dynamic>;
-        final config = ConfigModel.fromJson(json);
-        return config;
+        return ConfigModel.fromJson(json);
       }
     } catch (e) {
       _log.e('Error loading configuration: $e');
@@ -365,7 +359,6 @@ class ConfigService {
     return ConfigModel.empty;
   }
 
-  /// Serializes and persists the provided [ConfigModel] to disk.
   static Future<void> saveConfig(ConfigModel config) async {
     try {
       final configPath = await getConfigFilePath();
@@ -379,7 +372,6 @@ class ConfigService {
     }
   }
 
-  /// Loads the static registry of supported systems from application assets.
   static Future<List<SystemModel>> loadAvailableSystems() async {
     try {
       final content = await rootBundle.loadString(
@@ -393,7 +385,6 @@ class ConfigService {
     }
   }
 
-  /// Loads the metadata and launch arguments for external emulators from assets.
   static Future<Map<String, EmulatorModel>> loadAvailableEmulators() async {
     try {
       final content = await rootBundle.loadString(
@@ -401,7 +392,6 @@ class ConfigService {
       );
       final Map<String, dynamic> json = jsonDecode(content);
       final emulatorsData = json['emulators'] as Map<String, dynamic>;
-
       final Map<String, EmulatorModel> emulators = {};
       for (final entry in emulatorsData.entries) {
         emulators[entry.key] = EmulatorModel.fromJson(
@@ -409,7 +399,6 @@ class ConfigService {
           entry.value as Map<String, dynamic>,
         );
       }
-
       return emulators;
     } catch (e) {
       _log.e('Error loading available emulators: $e');
@@ -417,31 +406,20 @@ class ConfigService {
     }
   }
 
-  /// Identifies supported emulation systems based on the folder structure of [romFolders].
-  ///
-  /// Performs a shallow scan to match subdirectory names with [availableSystems].
   static Future<List<SystemModel>> detectSystems({
     required List<String> romFolders,
     required List<SystemModel> availableSystems,
   }) async {
     final Map<String, SystemModel> detectedSystemsMap = {};
-
     try {
       for (final romFolder in romFolders) {
         final romDir = Directory(romFolder);
         if (!await romDir.exists()) continue;
-
-        final entities = await romDir
-            .list()
-            .where((entity) => entity is Directory)
-            .toList();
-
+        final entities = await romDir.list().where((entity) => entity is Directory).toList();
         for (final entity in entities) {
           final folderName = path.basename(entity.path);
-
           final matchingSystem = availableSystems.firstWhere(
-            (system) =>
-                system.folderName.toLowerCase() == folderName.toLowerCase(),
+            (system) => system.folderName.toLowerCase() == folderName.toLowerCase(),
             orElse: () => SystemModel(
               folderName: folderName,
               realName: 'Unknown System',
@@ -449,16 +427,11 @@ class ConfigService {
               color: '#607d8b',
             ),
           );
-
-          final romCount = await _countRomsInFolder(
-            entity.path,
-            matchingSystem.id,
-          );
-
+          final romCount = await _countRomsInFolder(entity.path, matchingSystem.id);
           final existing = detectedSystemsMap[matchingSystem.id];
           if (existing != null) {
             detectedSystemsMap[matchingSystem.id!] = existing.copyWith(
-              romCount: (existing.romCount) + romCount,
+              romCount: existing.romCount + romCount,
             );
           } else {
             detectedSystemsMap[matchingSystem.id!] = matchingSystem.copyWith(
@@ -475,7 +448,6 @@ class ConfigService {
     }
   }
 
-  /// Recursively counts files within a folder that match valid ROM extensions.
   static Future<int> _countRomsInFolder(
     String folderPath, [
     String? systemId,
@@ -483,24 +455,19 @@ class ConfigService {
     try {
       final folder = Directory(folderPath);
       if (!await folder.exists()) return 0;
-
       Set<String> romExtensions;
       if (systemId != null) {
         romExtensions = await SystemRepository.getExtensionsForSystem(systemId);
       } else {
         romExtensions = await SystemRepository.getAllValidExtensions();
       }
-
       int count = 0;
       await for (final entity in folder.list(recursive: true)) {
         if (entity is File) {
           final extension = path.extension(entity.path).toLowerCase();
-          if (romExtensions.contains(extension)) {
-            count++;
-          }
+          if (romExtensions.contains(extension)) count++;
         }
       }
-
       return count;
     } catch (e) {
       _log.e('Error counting ROMs in $folderPath: $e');
@@ -508,23 +475,17 @@ class ConfigService {
     }
   }
 
-  /// Scans the host system for installed standalone emulators defined in [availableEmulators].
-  ///
-  /// Verifies existence across all platform-specific `possiblePaths`.
   static Future<Map<String, EmulatorModel>> detectEmulators({
     required Map<String, EmulatorModel> availableEmulators,
   }) async {
     final Map<String, EmulatorModel> detectedEmulators = {};
-
     try {
       for (final entry in availableEmulators.entries) {
         final emulatorName = entry.key;
         final emulator = entry.value;
-
         String? detectedPath;
         final platform = _getCurrentPlatform();
         final possiblePaths = emulator.possiblePaths[platform] ?? [];
-
         for (final possiblePath in possiblePaths) {
           final file = File(possiblePath);
           if (await file.exists()) {
@@ -532,14 +493,12 @@ class ConfigService {
             break;
           }
         }
-
         detectedEmulators[emulatorName] = emulator.copyWith(
           path: detectedPath ?? '',
           detected: detectedPath != null,
           lastDetection: detectedPath != null ? DateTime.now() : null,
         );
       }
-
       return detectedEmulators;
     } catch (e) {
       _log.e('Error detecting emulators: $e');
@@ -547,7 +506,6 @@ class ConfigService {
     }
   }
 
-  /// Returns the current OS platform identifier.
   static String _getCurrentPlatform() {
     if (Platform.isWindows) return 'windows';
     if (Platform.isLinux) return 'linux';
