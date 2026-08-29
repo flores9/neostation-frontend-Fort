@@ -5,74 +5,39 @@ import 'package:neostation/repositories/system_repository.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:neostation/services/config_service.dart';
+import 'package:neostation/services/esde_config_resolver.dart';
 import 'package:neostation/services/logger_service.dart';
 
 /// Provider responsible for abstracting filesystem access across Android and Desktop platforms.
-///
-/// Handles resolution of system-specific paths for user data, game media
-/// (screenshots, videos), and localized assets. Implements smart ROM extension
-/// stripping and standardizes I/O operations.
 class FileProvider extends ChangeNotifier {
-  /// Default folder name for internal user configuration and database.
   static const String userDataFolder = 'user-data';
-
-  /// Default folder name for game artwork and media assets.
   static const String mediaFolder = 'media';
-
-  /// Subfolder name for game preview videos.
   static const String videosFolder = 'videos';
-
-  /// Subfolder name for game screenshots.
   static const String screenshotsFolder = 'screenshots';
 
   static final _log = LoggerService.instance;
 
-  /// Absolute path to the user-data directory.
   String? _userDataPath;
-
-  /// Absolute path to the root media directory.
   String? _mediaPath;
-
-  /// Absolute path to the user's standard Documents directory.
   String? _documentsPath;
-
-  /// Whether the provider has finished resolving all platform-specific paths.
   bool _isInitialized = false;
-
-  /// Cached map of supported file extensions per system, loaded from the database.
   Map<String, Set<String>> _systemExtensions = {};
 
-  /// Absolute path to the user's ES-DE application folder, or null if the ES-DE
-  /// import is not configured. Used for read-time fallback artwork resolution.
+  /// ES-DE application root selected by the user.
   String? _esdeRoot;
 
-  /// NeoStation system folder name -> ES-DE `downloaded_media` subfolder name,
-  /// captured during ES-DE import.
-  Map<String, String> _esdeSystemDirs = {};
+  /// NeoStation system folder -> absolute ES-DE media directory for that
+  /// system. Fort resolves this through ES-DE's MediaDirectory setting rather
+  /// than assuming `<ES-DE>/downloaded_media`.
+  Map<String, String> _esdeSystemMediaPaths = {};
 
-  /// "systemFolder\u0000romBase" -> ES-DE media subfolder (the ROM's directory
-  /// relative to the system folder). Only populated for ROMs that live in a
-  /// subfolder; ES-DE mirrors that structure inside `downloaded_media`.
+  /// "systemFolder\u0000romBase" -> ES-DE media subfolder mirrored from the
+  /// ROM's relative directory inside its system.
   Map<String, String> _esdeMediaSubdirs = {};
 
-  /// Builds the composite subdir-map key. The NUL separator can't occur in a
-  /// folder or ROM name, and both parts are lowercased because ES-DE ROMs are
-  /// matched case-insensitively at import time (so write- and read-side keys
-  /// agree even when the gamelist casing differs from the scanned filename).
   static String _esdeSubdirKey(String systemFolder, String romBase) =>
       '${systemFolder.toLowerCase()}\u0000${romBase.toLowerCase()}';
 
-  /// NeoStation media-type folder -> ES-DE `downloaded_media` categories, in
-  /// preference order. ES-DE scrapes more categories than NeoStation renders
-  /// and users routinely enable only some of them, so each type falls back to
-  /// the next-best ES-DE category rather than showing nothing.
-  ///
-  /// ES-DE's `miximages` are deliberately absent: they are composites (a
-  /// screenshot with the box art and usually the marquee baked in, on a padded
-  /// canvas), so they are not what any NeoStation slot means. In the fanart
-  /// slot they read worst of all — NeoStation draws the wheel on top of the
-  /// full-bleed background, so the logo lands twice on a letterboxed collage.
-  /// A missing slot is preferred over art that misrepresents it.
   static const Map<String, List<String>> _esdeMediaCategories = {
     'box2d': ['covers', '3dboxes'],
     'wheels': ['marquees'],
@@ -81,10 +46,7 @@ class FileProvider extends ChangeNotifier {
     'videos': ['videos'],
   };
 
-  /// Image extensions ES-DE writes into `downloaded_media`.
   static const List<String> _esdeMediaExtensions = ['png', 'jpg', 'webp'];
-
-  /// Video extensions ES-DE writes into `downloaded_media`.
   static const List<String> _esdeVideoExtensions = [
     'mp4',
     'webm',
@@ -95,16 +57,11 @@ class FileProvider extends ChangeNotifier {
     'm4v',
   ];
 
-  // Getters
   String? get userDataPath => _userDataPath;
   String? get mediaPath => _mediaPath;
   String? get documentsPath => _documentsPath;
   bool get isInitialized => _isInitialized;
 
-  /// Resolves physical filesystem paths based on the current operating system.
-  ///
-  /// On Android, prioritizes Scoped Storage directories and internal app support paths.
-  /// On Desktop, uses paths provided by [ConfigService] or current working directory fallbacks.
   Future<void> initialize() async {
     if (_isInitialized) return;
 
@@ -127,11 +84,9 @@ class FileProvider extends ChangeNotifier {
 
         final fullMediaPath = await ConfigService.getMediaPath();
         _mediaPath = path.dirname(fullMediaPath);
-
         _documentsPath = path.dirname(userDataDir.path);
       }
 
-      // Ensure directory structures exist.
       if (_userDataPath != null) {
         final userDataDir = Directory(_userDataPath!);
         if (!await userDataDir.exists()) {
@@ -160,13 +115,6 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Sanitizes a ROM filename by stripping its extension.
-  ///
-  /// Implements a multi-stage logic to prevent false positives:
-  /// 1. Checks against the database-backed system extension whitelist.
-  /// 2. Preserves version-like strings (e.g., '.v1').
-  /// 3. Checks against common ROM extensions.
-  /// 4. Fallback for short, non-spaced substrings following the final dot.
   String _stripRomExtension(String romName, [String? systemFolderName]) {
     final validExtensions = systemFolderName != null
         ? _systemExtensions[systemFolderName]
@@ -174,8 +122,6 @@ class FileProvider extends ChangeNotifier {
     return stripRomExtension(romName, validExtensions);
   }
 
-  /// Common ROM container/image extensions used by the extension-stripping
-  /// fallback when a system-specific whitelist isn't available.
   static const Set<String> _commonRomExts = {
     'zip',
     '7z',
@@ -207,13 +153,6 @@ class FileProvider extends ChangeNotifier {
     'rpx',
   };
 
-  /// Strips a ROM filename's extension using the same multi-stage logic
-  /// everywhere (single source of truth so write-time and read-time media keys
-  /// stay in agreement):
-  /// 1. If [validExtensions] is given and matches, strip it.
-  /// 2. Preserve version-like strings (e.g. `.v1`, `.123`).
-  /// 3. Strip known common ROM extensions.
-  /// 4. Fallback: strip short, non-spaced extensions.
   static String stripRomExtension(
     String romName, [
     Set<String>? validExtensions,
@@ -242,7 +181,6 @@ class FileProvider extends ChangeNotifier {
     return romName;
   }
 
-  /// Resolves the absolute path for a game's preview video.
   String getVideoPath(String systemFolderName, String romName) {
     final baseName = _stripRomExtension(romName, systemFolderName);
 
@@ -263,7 +201,6 @@ class FileProvider extends ChangeNotifier {
     );
   }
 
-  /// Resolves the absolute path for a game's screenshot.
   String getScreenshotPath(String systemFolderName, String romName) {
     final baseName = _stripRomExtension(romName, systemFolderName);
 
@@ -284,7 +221,6 @@ class FileProvider extends ChangeNotifier {
     );
   }
 
-  /// Resolves the absolute path for any specific media type and extension.
   String getMediaPath(
     String systemFolderName,
     String imageType,
@@ -310,7 +246,6 @@ class FileProvider extends ChangeNotifier {
     );
   }
 
-  /// Joins a relative path with the absolute user-data directory.
   String getAbsolutePath(String relativePath) {
     if (!_isInitialized || _userDataPath == null) {
       return path.join(userDataFolder, relativePath);
@@ -318,7 +253,6 @@ class FileProvider extends ChangeNotifier {
     return path.join(_userDataPath!, relativePath);
   }
 
-  /// Resolves the expected internal path for a ROM file.
   String getRomPath(String systemFolderName, String romName) {
     if (!_isInitialized || _userDataPath == null) {
       return path.join(
@@ -331,7 +265,6 @@ class FileProvider extends ChangeNotifier {
     return path.join(_userDataPath!, 'roms', systemFolderName, '$romName.zip');
   }
 
-  /// Checks if a file exists asynchronously.
   Future<bool> fileExists(String filePath) async {
     try {
       final file = File(filePath);
@@ -342,7 +275,6 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Recursively creates the parent directories for a given file path if they do not exist.
   Future<void> ensureDirectoryExists(String filePath) async {
     try {
       final directory = Directory(path.dirname(filePath));
@@ -354,7 +286,6 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Returns a list of all files and directories within a given path.
   Future<List<FileSystemEntity>> getFilesInDirectory(
     String directoryPath,
   ) async {
@@ -370,7 +301,6 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Retrieves the file size in bytes.
   Future<int> getFileSize(String filePath) async {
     try {
       final file = File(filePath);
@@ -384,7 +314,6 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Copies a file to a new location, ensuring destination directories exist.
   Future<bool> copyFile(String sourcePath, String destinationPath) async {
     try {
       await ensureDirectoryExists(destinationPath);
@@ -397,7 +326,6 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Deletes a file from the filesystem if it exists.
   Future<bool> deleteFile(String filePath) async {
     try {
       final file = File(filePath);
@@ -412,17 +340,14 @@ class FileProvider extends ChangeNotifier {
     }
   }
 
-  /// Returns the system's Documents directory path.
   String getDocumentsPath() {
     return _documentsPath ?? Directory.current.path;
   }
 
-  /// Returns the absolute path to the application's user-data directory.
   String getAppDirectoryPath() {
     return _userDataPath ?? userDataFolder;
   }
 
-  /// Returns the absolute path to the application's root media directory.
   String getMediaDirectoryPath() {
     if (!_isInitialized || _mediaPath == null) {
       return mediaFolder;
@@ -430,8 +355,8 @@ class FileProvider extends ChangeNotifier {
     return path.join(_mediaPath!, mediaFolder);
   }
 
-  /// Loads ES-DE fallback configuration (root path + per-system media dirs)
-  /// from the database. Safe to call repeatedly.
+  /// Loads ES-DE fallback configuration and resolves each persisted ES-DE
+  /// system name to its effective absolute media directory.
   Future<void> _loadEsdeConfig() async {
     try {
       final db = await SqliteService.getDatabase();
@@ -449,6 +374,7 @@ class FileProvider extends ChangeNotifier {
 
       final map = <String, String>{};
       if (_esdeRoot != null) {
+        final resolved = await EsdeConfigResolver.load(_esdeRoot!);
         final rows = await db.rawQuery('''
           SELECT s.folder_name AS folder_name, ss.esde_media_dir AS esde_media_dir
           FROM user_system_settings ss
@@ -457,11 +383,12 @@ class FileProvider extends ChangeNotifier {
         ''');
         for (final r in rows) {
           final fn = r['folder_name']?.toString();
-          final ed = r['esde_media_dir']?.toString();
-          if (fn != null && ed != null && ed.isNotEmpty) map[fn] = ed;
+          final esdeSystem = r['esde_media_dir']?.toString();
+          if (fn == null || esdeSystem == null || esdeSystem.isEmpty) continue;
+          map[fn] = resolved.forSystem(esdeSystem).mediaDirectory;
         }
       }
-      _esdeSystemDirs = map;
+      _esdeSystemMediaPaths = map;
 
       final subdirs = <String, String>{};
       if (_esdeRoot != null) {
@@ -485,32 +412,20 @@ class FileProvider extends ChangeNotifier {
       }
       _esdeMediaSubdirs = subdirs;
     } catch (e) {
+      _log.e('FileProvider: failed to load ES-DE configuration: $e');
       _esdeRoot = null;
-      _esdeSystemDirs = {};
+      _esdeSystemMediaPaths = {};
       _esdeMediaSubdirs = {};
     }
   }
 
-  /// Reloads ES-DE fallback configuration after an import and notifies
-  /// listeners so views re-resolve artwork.
   Future<void> refreshEsde() async {
     await _loadEsdeConfig();
     notifyListeners();
   }
 
-  /// Candidate read-time fallback paths for a media asset inside the user's
-  /// ES-DE `downloaded_media` tree, most-preferred first, or empty if ES-DE is
-  /// not configured for this system / media type. Does NOT check existence —
-  /// the caller stats them in order.
-  ///
-  /// Candidates cover every ES-DE category mapped to [imageType] and every
-  /// extension ES-DE writes. When the import recorded a media subfolder for
-  /// this ROM the subfolder is tried first, then the category root: ES-DE can
-  /// list one ROM filename in several subfolders and only one of them is
-  /// recorded, so the root is where the art often actually sits.
-  ///
-  /// If [extensions] is provided, it overrides the default image extensions
-  /// with the provided list (e.g., video extensions for video lookups).
+  /// Candidate read-time fallback paths for a media asset inside the effective
+  /// ES-DE media directory for this system. Does not check existence.
   List<String> getEsdeMediaCandidates(
     String systemFolderName,
     String imageType,
@@ -518,8 +433,8 @@ class FileProvider extends ChangeNotifier {
     List<String>? extensions,
   ]) {
     if (_esdeRoot == null) return const [];
-    final esdeDir = _esdeSystemDirs[systemFolderName];
-    if (esdeDir == null) return const [];
+    final systemMediaPath = _esdeSystemMediaPaths[systemFolderName];
+    if (systemMediaPath == null) return const [];
     final categories = _esdeMediaCategories[imageType];
     if (categories == null) return const [];
     final baseName = _stripRomExtension(romName, systemFolderName);
@@ -531,16 +446,13 @@ class FileProvider extends ChangeNotifier {
     ];
 
     final extList = extensions ?? _esdeMediaExtensions;
-
     final candidates = <String>[];
     for (final category in categories) {
       for (final sub in subdirs) {
         for (final extension in extList) {
           candidates.add(
             path.joinAll([
-              _esdeRoot!,
-              'downloaded_media',
-              esdeDir,
+              systemMediaPath,
               category,
               if (sub.isNotEmpty) sub,
               '$baseName.$extension',
@@ -552,15 +464,6 @@ class FileProvider extends ChangeNotifier {
     return candidates;
   }
 
-  /// Candidate read-time fallback paths for a video asset inside the user's
-  /// ES-DE `downloaded_media` tree, most-preferred first, or empty if ES-DE is
-  /// not configured for this system. Does NOT check existence —
-  /// the caller stats them in order.
-  ///
-  /// Candidates cover every video extension ES-DE writes. When the import recorded
-  /// a media subfolder for this ROM the subfolder is tried first, then the
-  /// category root: ES-DE can list one ROM filename in several subfolders and
-  /// only one of them is recorded, so the root is where the video often actually sits.
   List<String> getEsdeVideoCandidates(String systemFolderName, String romName) {
     return getEsdeMediaCandidates(
       systemFolderName,
@@ -570,13 +473,12 @@ class FileProvider extends ChangeNotifier {
     );
   }
 
-  /// Resets the internal state of the provider.
   void reset() {
     _userDataPath = null;
     _mediaPath = null;
     _documentsPath = null;
     _esdeRoot = null;
-    _esdeSystemDirs = {};
+    _esdeSystemMediaPaths = {};
     _esdeMediaSubdirs = {};
     _isInitialized = false;
     notifyListeners();
