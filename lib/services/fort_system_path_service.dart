@@ -7,10 +7,6 @@ import 'config_service.dart';
 import 'logger_service.dart';
 
 /// Manual Fort path overrides for one NeoStation system.
-///
-/// Null fields mean "automatic" and therefore fall back to ES-DE/native
-/// discovery. Values are intentionally independent: a user may keep ROMs on
-/// internal storage, media on a microSD and the gamelist somewhere else.
 class FortSystemPathOverride {
   final String? romDirectory;
   final String? mediaDirectory;
@@ -62,11 +58,6 @@ class FortSystemPathOverride {
 }
 
 /// Fort-owned persistence for per-system path overrides.
-///
-/// Kept outside NeoStation's SQLite schema so this fork can continue pulling
-/// upstream database migrations without claiming/colliding with migration
-/// numbers. The JSON lives under NeoStation's configured user-data directory,
-/// is versioned, human-readable and can be included in release/support backups.
 class FortSystemPathService {
   FortSystemPathService._();
 
@@ -113,8 +104,6 @@ class FortSystemPathService {
       _cache = loaded;
       return Map.unmodifiable(loaded);
     } catch (e) {
-      // Never replace a malformed file automatically. Returning an empty map
-      // keeps NeoStation usable while preserving the file for diagnosis.
       _log.e('Fort path overrides could not be read: $e');
       _cache = <String, FortSystemPathOverride>{};
       return const {};
@@ -124,6 +113,11 @@ class FortSystemPathService {
   static Future<FortSystemPathOverride> getForSystem(String systemFolder) async {
     final all = await loadAll();
     return all[systemFolder.toLowerCase()] ?? const FortSystemPathOverride();
+  }
+
+  /// Synchronous view used on hot media lookup paths after initial load/save.
+  static FortSystemPathOverride? cachedForSystem(String systemFolder) {
+    return _cache?[systemFolder.toLowerCase()];
   }
 
   static Future<void> saveForSystem(
@@ -163,6 +157,5 @@ class FortSystemPathService {
     _cache = Map<String, FortSystemPathOverride>.from(values);
   }
 
-  /// Test/support hook used after replacing user-data or editing the JSON.
   static void invalidateCache() => _cache = null;
 }
