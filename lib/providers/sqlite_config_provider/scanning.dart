@@ -336,8 +336,9 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           final lowerPrimary = system.folderName.toLowerCase();
           if (allExistingFolders.contains(lowerPrimary)) return true;
           for (final altFolder in system.folders) {
-            if (allExistingFolders.contains(altFolder.toLowerCase()))
+            if (allExistingFolders.contains(altFolder.toLowerCase())) {
               return true;
+            }
           }
           if (system.folderName == 'android' || system.folderName == 'all') {
             return true;
