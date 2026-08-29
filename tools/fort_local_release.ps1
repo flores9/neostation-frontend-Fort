@@ -21,6 +21,27 @@ function Invoke-Checked {
     }
 }
 
+function Get-NativeVersionText {
+    param([Parameter(Mandatory = $true)][string]$Executable)
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Executable
+    $startInfo.Arguments = "-version"
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    [void]$process.Start()
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+
+    return "$stdout`n$stderr"
+}
+
 function Find-Java17Home {
     $candidates = New-Object System.Collections.Generic.List[string]
 
@@ -44,7 +65,12 @@ function Find-Java17Home {
         $javaExe = Join-Path $candidate "bin\java.exe"
         if (-not (Test-Path $javaExe)) { continue }
 
-        $versionText = (& $javaExe -version 2>&1 | Out-String)
+        try {
+            $versionText = Get-NativeVersionText -Executable $javaExe
+        } catch {
+            continue
+        }
+
         if ($versionText -match 'version\s+"17\.' -or $versionText -match 'openjdk\s+17\.') {
             return (Resolve-Path $candidate).Path
         }
