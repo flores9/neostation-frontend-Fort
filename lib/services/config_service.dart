@@ -156,7 +156,9 @@ class ConfigService {
         if (executable.contains('/.mount_') ||
             executable.endsWith('.AppImage')) {
           final home = Platform.environment['HOME'];
-          basePath = home != null ? path.join(home, '.neostation') : Directory.current.path;
+          basePath = home != null
+              ? path.join(home, '.neostation')
+              : Directory.current.path;
         } else {
           basePath = Directory.current.path;
         }
@@ -200,25 +202,25 @@ class ConfigService {
 
   /// Returns the exact Fort/ES-DE ROM directory for [system], if one should
   /// override NeoStation's global ROM-root discovery.
-  ///
-  /// Priority is manual Fort override, then explicit ES-DE custom-system path,
-  /// then an existing path derived from ES-DE ROMDirectory. An explicit custom
-  /// path is returned even while its volume is unavailable so the scanner can
-  /// preserve stored rows instead of silently falling back and pruning them.
   static Future<String?> getFortSystemRomDirectory(
     SystemModel system, {
     String? esdeRoot,
   }) async {
     final manual = await FortSystemPathService.getForSystem(system.folderName);
     if (manual.romDirectory != null) return manual.romDirectory;
+    return _getAutomaticEsdeRomDirectory(system, esdeRoot: esdeRoot);
+  }
 
+  static Future<String?> _getAutomaticEsdeRomDirectory(
+    SystemModel system, {
+    String? esdeRoot,
+  }) async {
     final root = esdeRoot?.trim();
     if (root == null || root.isEmpty) return null;
 
     try {
       final resolved = await EsdeConfigResolver.load(root);
       final names = <String>{system.folderName, ...system.folders};
-
       for (final name in names) {
         final explicit = resolved.customSystemRomPaths[name.toLowerCase()];
         if (explicit != null && explicit.isNotEmpty) return explicit;
@@ -238,9 +240,6 @@ class ConfigService {
     return null;
   }
 
-  /// Whether Fort has any configured per-system ROM source at all. Used to
-  /// prevent NeoStation's empty-global-root "fast scan" from skipping ES-DE
-  /// systems that are intentionally configured by exact path.
   static Future<bool> hasFortRomSources({String? esdeRoot}) async {
     final overrides = await FortSystemPathService.loadAll();
     if (overrides.values.any((v) => v.romDirectory != null)) return true;
@@ -256,8 +255,6 @@ class ConfigService {
     }
   }
 
-  /// Checks the exact source before allowing a scan that could prune database
-  /// rows. An inaccessible path is different from an accessible empty folder.
   static Future<bool> isFortRomDirectoryAccessible(String directory) async {
     if (directory.startsWith('content://')) {
       if (!Platform.isAndroid) return false;
@@ -286,6 +283,104 @@ class ConfigService {
     }
   }
 
+  /// UI/support snapshot for the three independent per-system Fort paths.
+  /// Keys ending in `Manual` contain the persisted override; keys ending in
+  /// `Auto` contain the current ES-DE-derived value when one can be resolved.
+  static Future<Map<String, String?>> getFortSystemPathSnapshot(
+    SystemModel system, {
+    String? esdeRoot,
+  }) async {
+    final manual = await FortSystemPathService.getForSystem(system.folderName);
+    String? autoRom;
+    String? autoMedia;
+    String? autoGamelist;
+
+    final root = esdeRoot?.trim();
+    if (root != null && root.isNotEmpty) {
+      try {
+        final resolved = await EsdeConfigResolver.load(root);
+        final names = <String>{system.folderName, ...system.folders};
+        String chosenName = system.folderName;
+
+        for (final name in names) {
+          if (resolved.customSystemRomPaths.containsKey(name.toLowerCase())) {
+            chosenName = name;
+            break;
+          }
+          final candidate = resolved.forSystem(name);
+          if (candidate.firstExistingGamelist != null) {
+            chosenName = name;
+            break;
+          }
+        }
+
+        final auto = resolved.forSystem(chosenName);
+        autoRom = await _getAutomaticEsdeRomDirectory(
+          system,
+          esdeRoot: root,
+        );
+        autoMedia = auto.mediaDirectory;
+        autoGamelist = auto.firstExistingGamelist ??
+            (auto.gamelistCandidates.isEmpty
+                ? null
+                : auto.gamelistCandidates.first);
+      } catch (e) {
+        _log.w('Fort path snapshot failed for ${system.folderName}: $e');
+      }
+    }
+
+    return {
+      'romManual': manual.romDirectory,
+      'mediaManual': manual.mediaDirectory,
+      'gamelistManual': manual.gamelistFile,
+      'romAuto': autoRom,
+      'mediaAuto': autoMedia,
+      'gamelistAuto': autoGamelist,
+      'romEffective': manual.romDirectory ?? autoRom,
+      'mediaEffective': manual.mediaDirectory ?? autoMedia,
+      'gamelistEffective': manual.gamelistFile ?? autoGamelist,
+    };
+  }
+
+  static Future<void> setFortSystemRomOverride(
+    String systemFolder,
+    String? value,
+  ) async {
+    final current = await FortSystemPathService.getForSystem(systemFolder);
+    await FortSystemPathService.saveForSystem(
+      systemFolder,
+      value == null || value.trim().isEmpty
+          ? current.copyWith(clearRomDirectory: true)
+          : current.copyWith(romDirectory: value.trim()),
+    );
+  }
+
+  static Future<void> setFortSystemMediaOverride(
+    String systemFolder,
+    String? value,
+  ) async {
+    final current = await FortSystemPathService.getForSystem(systemFolder);
+    await FortSystemPathService.saveForSystem(
+      systemFolder,
+      value == null || value.trim().isEmpty
+          ? current.copyWith(clearMediaDirectory: true)
+          : current.copyWith(mediaDirectory: value.trim()),
+    );
+  }
+
+  static Future<void> setFortSystemGamelistOverride(
+    String systemFolder,
+    String? value,
+  ) async {
+    final current = await FortSystemPathService.getForSystem(systemFolder);
+    await FortSystemPathService.saveForSystem(
+      systemFolder,
+      value == null || value.trim().isEmpty
+          ? current.copyWith(clearGamelistFile: true)
+          : current.copyWith(gamelistFile: value.trim()),
+    );
+  }
+
   static Future<String> getMediaPath() async {
     if (Platform.isAndroid) {
       final userDataPath = await getUserDataPath();
@@ -312,9 +407,12 @@ class ConfigService {
       String basePath;
       if (Platform.isLinux) {
         final executable = Platform.resolvedExecutable;
-        if (executable.contains('/.mount_') || executable.endsWith('.AppImage')) {
+        if (executable.contains('/.mount_') ||
+            executable.endsWith('.AppImage')) {
           final home = Platform.environment['HOME'];
-          basePath = home != null ? path.join(home, '.neostation') : Directory.current.path;
+          basePath = home != null
+              ? path.join(home, '.neostation')
+              : Directory.current.path;
         } else {
           basePath = Directory.current.path;
         }
@@ -415,11 +513,15 @@ class ConfigService {
       for (final romFolder in romFolders) {
         final romDir = Directory(romFolder);
         if (!await romDir.exists()) continue;
-        final entities = await romDir.list().where((entity) => entity is Directory).toList();
+        final entities = await romDir
+            .list()
+            .where((entity) => entity is Directory)
+            .toList();
         for (final entity in entities) {
           final folderName = path.basename(entity.path);
           final matchingSystem = availableSystems.firstWhere(
-            (system) => system.folderName.toLowerCase() == folderName.toLowerCase(),
+            (system) =>
+                system.folderName.toLowerCase() == folderName.toLowerCase(),
             orElse: () => SystemModel(
               folderName: folderName,
               realName: 'Unknown System',
@@ -427,7 +529,10 @@ class ConfigService {
               color: '#607d8b',
             ),
           );
-          final romCount = await _countRomsInFolder(entity.path, matchingSystem.id);
+          final romCount = await _countRomsInFolder(
+            entity.path,
+            matchingSystem.id,
+          );
           final existing = detectedSystemsMap[matchingSystem.id];
           if (existing != null) {
             detectedSystemsMap[matchingSystem.id!] = existing.copyWith(
