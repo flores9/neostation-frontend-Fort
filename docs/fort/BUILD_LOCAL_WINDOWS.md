@@ -9,7 +9,7 @@ El build autoritativo de las APK Fort se hace en local para no consumir minutos 
 - JDK 17 con `JAVA_HOME` correctamente configurado.
 - Android SDK compatible con Flutter.
 - FVM recomendado. El repositorio fija Flutter en `.fvmrc` (actualmente 3.47.1).
-- Material de firma permanente para releases publicables en `android/key.properties` y un keystore local que **nunca** se sube al repositorio.
+- Para releases definitivas, la identidad de firma Fort permanente generada una sola vez.
 
 ## Primera preparación
 
@@ -33,11 +33,27 @@ $env:JAVA_HOME
 
 Si `java` no aparece, instala/configura JDK 17 antes de continuar.
 
-## Firma
+## Firma permanente Fort - una sola vez
 
-El Gradle del proyecto lee `android/key.properties`. Mantén el keystore y las contraseñas sólo en tu PC. El script rechaza por defecto generar una release publicable si no existe `android/key.properties`.
+NeoStation Fort tiene un `applicationId` distinto del NeoStation original y debe conservar siempre la misma clave de firma para que R2, R3, etc. puedan instalarse como actualización de R1.
 
-Para una APK puramente temporal puede usarse `-AllowDebugSigning`, pero esa APK no debe publicarse como release Fort definitiva.
+Ejecuta una sola vez:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\fort_setup_signing.ps1
+```
+
+El script:
+
+- solicita dos contraseñas sin mostrarlas;
+- crea el keystore en `%USERPROFILE%\.neostation-fort\signing\neostation-fort-release.jks`;
+- crea `android\key.properties`;
+- se niega a sobrescribir una identidad ya existente;
+- no sube ningún secreto a GitHub.
+
+Haz una copia segura del `.jks` y de ambas contraseñas. Si se pierde esa clave, futuras APK Fort no podrán actualizar una instalación ya existente.
+
+El `.gitignore` raíz excluye `key.properties`, `android/key.properties` y `*.jks`.
 
 ## Construcción completa
 
@@ -61,9 +77,10 @@ El script:
 10. Ejecuta `flutter test`.
 11. Compila sólo Android ARM64 en release.
 12. Copia y renombra la APK.
-13. Incluye la documentación Fort, manifest de build, historial Git y diffstat.
-14. Calcula SHA-256.
-15. Genera un ZIP de entrega.
+13. Incluye documentación Fort y scripts de build/firma.
+14. Genera manifest, historial Git y diffstat.
+15. Calcula SHA-256.
+16. Genera un ZIP de entrega.
 
 Salida esperada:
 
@@ -76,18 +93,21 @@ dist/
     UPSTREAM_BASE_DIFFSTAT.txt
     SHA256SUMS.txt
     fort_local_release.ps1
+    fort_setup_signing.ps1
     docs/
       ...
   NeoStation-Fort-R1-delivery.zip
 ```
 
-## Build de diagnóstico
+## Primer build de diagnóstico
 
-Sólo para aislar un fallo, nunca como release final:
+Si todavía no quieres crear la firma permanente, para la primera compilación técnica puedes usar:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\fort_local_release.ps1 -AllowDebugSigning
 ```
+
+Esta opción sigue ejecutando formato, analyzer y tests, pero la APK resultante es sólo de diagnóstico y **no** debe publicarse como release Fort definitiva.
 
 También existen `-SkipTests` y `-SkipAnalyze`, pero cualquier build generado con esos switches debe considerarse no liberable hasta repetir el proceso completo sin ellos.
 
@@ -99,6 +119,7 @@ No crear tag/release ni subir la APK definitiva hasta que:
 - analyze OK,
 - tests OK,
 - build release ARM64 OK,
+- firma permanente Fort OK,
 - instalación/actualización en AYN Thor OK,
 - pruebas manuales R1 completadas,
 - SHA-256 guardado,
