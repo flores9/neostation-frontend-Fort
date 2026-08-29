@@ -300,14 +300,10 @@ class _FortSystemPathsDialog extends StatefulWidget {
   final SystemModel system;
   final String? esdeRoot;
 
-  const _FortSystemPathsDialog({
-    required this.system,
-    required this.esdeRoot,
-  });
+  const _FortSystemPathsDialog({required this.system, required this.esdeRoot});
 
   @override
-  State<_FortSystemPathsDialog> createState() =>
-      _FortSystemPathsDialogState();
+  State<_FortSystemPathsDialog> createState() => _FortSystemPathsDialogState();
 }
 
 class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
@@ -451,10 +447,7 @@ class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
               Expanded(
                 child: Text(
                   label,
-                  style: TextStyle(
-                    fontSize: 12.r,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(fontSize: 12.r, fontWeight: FontWeight.w600),
                 ),
               ),
               if (manual)
@@ -509,10 +502,9 @@ class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
                       'A manual value is authoritative only for this platform.',
                       style: TextStyle(
                         fontSize: 10.r,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.65),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.65),
                       ),
                     ),
                     SizedBox(height: 16.r),

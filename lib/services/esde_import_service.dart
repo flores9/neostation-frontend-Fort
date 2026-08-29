@@ -515,11 +515,7 @@ class EsdeImportService {
         (_text(existing, 'path') ?? '').replaceAll('\\', '/'),
       );
       final newSubdir = _mediaSubdir(normalized);
-      if (!_esdeMediaExists(
-            systemMediaDirectory,
-            filename,
-            existingSubdir,
-          ) &&
+      if (!_esdeMediaExists(systemMediaDirectory, filename, existingSubdir) &&
           _esdeMediaExists(systemMediaDirectory, filename, newSubdir)) {
         chosen[key] = game;
       }

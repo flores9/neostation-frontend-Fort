@@ -315,12 +315,10 @@ class ConfigService {
         }
 
         final auto = resolved.forSystem(chosenName);
-        autoRom = await _getAutomaticEsdeRomDirectory(
-          system,
-          esdeRoot: root,
-        );
+        autoRom = await _getAutomaticEsdeRomDirectory(system, esdeRoot: root);
         autoMedia = auto.mediaDirectory;
-        autoGamelist = auto.firstExistingGamelist ??
+        autoGamelist =
+            auto.firstExistingGamelist ??
             (auto.gamelistCandidates.isEmpty
                 ? null
                 : auto.gamelistCandidates.first);

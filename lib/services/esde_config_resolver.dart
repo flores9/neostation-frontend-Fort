@@ -65,7 +65,8 @@ class EsdeResolvedConfig {
     final normalizedName = systemName.trim();
     final key = normalizedName.toLowerCase();
     final customRomPath = customSystemRomPaths[key];
-    final romPath = customRomPath ??
+    final romPath =
+        customRomPath ??
         (settings.romDirectory == null
             ? null
             : path.join(settings.romDirectory!, normalizedName));
@@ -76,8 +77,9 @@ class EsdeResolvedConfig {
       normalizedName,
       'gamelist.xml',
     );
-    final romGamelist =
-        romPath == null ? null : path.join(romPath, 'gamelist.xml');
+    final romGamelist = romPath == null
+        ? null
+        : path.join(romPath, 'gamelist.xml');
 
     final candidates = <String>[];
     // When ES-DE legacy gamelist mode is enabled the ROM-local file is the

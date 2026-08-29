@@ -30,10 +30,15 @@ class FortSystemPathOverride {
     bool clearGamelistFile = false,
   }) {
     return FortSystemPathOverride(
-      romDirectory: clearRomDirectory ? null : romDirectory ?? this.romDirectory,
-      mediaDirectory:
-          clearMediaDirectory ? null : mediaDirectory ?? this.mediaDirectory,
-      gamelistFile: clearGamelistFile ? null : gamelistFile ?? this.gamelistFile,
+      romDirectory: clearRomDirectory
+          ? null
+          : romDirectory ?? this.romDirectory,
+      mediaDirectory: clearMediaDirectory
+          ? null
+          : mediaDirectory ?? this.mediaDirectory,
+      gamelistFile: clearGamelistFile
+          ? null
+          : gamelistFile ?? this.gamelistFile,
     );
   }
 
@@ -110,7 +115,9 @@ class FortSystemPathService {
     }
   }
 
-  static Future<FortSystemPathOverride> getForSystem(String systemFolder) async {
+  static Future<FortSystemPathOverride> getForSystem(
+    String systemFolder,
+  ) async {
     final all = await loadAll();
     return all[systemFolder.toLowerCase()] ?? const FortSystemPathOverride();
   }
@@ -138,9 +145,7 @@ class FortSystemPathService {
     await saveForSystem(systemFolder, const FortSystemPathOverride());
   }
 
-  static Future<void> _write(
-    Map<String, FortSystemPathOverride> values,
-  ) async {
+  static Future<void> _write(Map<String, FortSystemPathOverride> values) async {
     final file = File(await configPath);
     await file.parent.create(recursive: true);
     final payload = <String, dynamic>{

@@ -125,7 +125,8 @@ extension SqliteConfigScanning on SqliteConfigProvider {
     );
 
     if (Platform.isAndroid) {
-      final hasBroadPermissions = await PermissionService.hasStoragePermissions();
+      final hasBroadPermissions =
+          await PermissionService.hasStoragePermissions();
       final hasSafFolders = _config.romFolders.any(
         (f) => f.startsWith('content://'),
       );
@@ -335,7 +336,8 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           final lowerPrimary = system.folderName.toLowerCase();
           if (allExistingFolders.contains(lowerPrimary)) return true;
           for (final altFolder in system.folders) {
-            if (allExistingFolders.contains(altFolder.toLowerCase())) return true;
+            if (allExistingFolders.contains(altFolder.toLowerCase()))
+              return true;
           }
           if (system.folderName == 'android' || system.folderName == 'all') {
             return true;
@@ -500,7 +502,9 @@ extension SqliteConfigScanning on SqliteConfigProvider {
 
       for (final system in allSystems) {
         if (system.folderName == 'all') continue;
-        final romCount = await SystemRepository.getRomCountForSystem(system.id!);
+        final romCount = await SystemRepository.getRomCountForSystem(
+          system.id!,
+        );
 
         bool hasFolderWhenNonRecursive = false;
         if (!system.recursiveScan) {
@@ -630,10 +634,7 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           'Fort ScanResult[${system.realName}] source=$direct: '
           'added=${summary.added} removed=${summary.removed} total=${summary.total}',
         );
-        await refreshSystem(
-          system,
-          rootFoldersMap: {direct: exactMap},
-        );
+        await refreshSystem(system, rootFoldersMap: {direct: exactMap});
         if (system.folderName == 'steam') {
           SteamScraperService.scrapeSteamGames();
         }

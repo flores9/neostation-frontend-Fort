@@ -76,13 +76,10 @@ void main() {
       final ps2 = config.forSystem('ps2');
       expect(ps2.romDirectory, '/storage/emulated/0/ROMs/ps2');
       expect(ps2.mediaDirectory, '/storage/14F5-471E/ROMs/ps2');
-      expect(
-        ps2.gamelistCandidates,
-        [
-          '/storage/emulated/0/ES-DE/gamelists/ps2/gamelist.xml',
-          '/storage/emulated/0/ROMs/ps2/gamelist.xml',
-        ],
-      );
+      expect(ps2.gamelistCandidates, [
+        '/storage/emulated/0/ES-DE/gamelists/ps2/gamelist.xml',
+        '/storage/emulated/0/ROMs/ps2/gamelist.xml',
+      ]);
 
       final psx = config.forSystem('psx');
       expect(psx.romDirectory, '/storage/14F5-471E/ROMs/psx');
@@ -99,13 +96,10 @@ void main() {
         customSystemRomPaths: const {},
       );
 
-      expect(
-        config.forSystem('snes').gamelistCandidates,
-        [
-          '/storage/emulated/0/ROMs/snes/gamelist.xml',
-          '/storage/emulated/0/ES-DE/gamelists/snes/gamelist.xml',
-        ],
-      );
+      expect(config.forSystem('snes').gamelistCandidates, [
+        '/storage/emulated/0/ROMs/snes/gamelist.xml',
+        '/storage/emulated/0/ES-DE/gamelists/snes/gamelist.xml',
+      ]);
     });
 
     test('default media fallback remains downloaded_media', () {
