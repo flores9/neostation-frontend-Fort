@@ -232,15 +232,32 @@ if (-not $SkipTests) {
             "rom_scan_symlink_alias_test.dart",
             "storage_space_service_test.dart"
         )
-        $TestFiles = Get-ChildItem (Join-Path $RepoRoot "test") -Recurse -File -Filter "*_test.dart" |
-            Where-Object { $WindowsIncompatibleTests -notcontains $_.Name } |
-            ForEach-Object { $_.FullName }
+        $TestFiles = @(
+            Get-ChildItem (Join-Path $RepoRoot "test") -Recurse -File -Filter "*_test.dart" |
+                Where-Object { $WindowsIncompatibleTests -notcontains $_.Name } |
+                ForEach-Object { [IO.Path]::GetRelativePath($RepoRoot, $_.FullName) }
+        )
 
         Write-Host "Windows host: excluding upstream Linux/POSIX-only test files:"
         $WindowsIncompatibleTests | ForEach-Object { Write-Host "  - $_" }
         Write-Host "Running $($TestFiles.Count) host-compatible test files (including all Fort tests)."
-        Invoke-Checked "Flutter tests (Windows host-compatible gate)" {
-            Invoke-Flutter test @TestFiles
+
+        # cmd.exe has a much shorter command-line limit than Linux. Passing all
+        # test paths at once can exceed it even though every individual path is
+        # valid. Run deterministic batches instead; a failure in any batch still
+        # aborts the release immediately.
+        $WindowsTestBatchSize = 20
+        $BatchCount = [int][Math]::Ceiling($TestFiles.Count / [double]$WindowsTestBatchSize)
+        for ($offset = 0; $offset -lt $TestFiles.Count; $offset += $WindowsTestBatchSize) {
+            $end = [Math]::Min(
+                $offset + $WindowsTestBatchSize - 1,
+                $TestFiles.Count - 1
+            )
+            $batch = @($TestFiles[$offset..$end])
+            $batchNumber = [int]($offset / $WindowsTestBatchSize) + 1
+            Invoke-Checked "Flutter tests (Windows batch $batchNumber/$BatchCount)" {
+                Invoke-Flutter test @batch
+            }
         }
     } else {
         Invoke-Checked "Flutter tests" { Invoke-Flutter test }
