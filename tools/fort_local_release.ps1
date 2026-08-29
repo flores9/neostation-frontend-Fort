@@ -258,6 +258,7 @@ if (-not $SkipTests) {
         $TestFiles = @(
             Get-ChildItem (Join-Path $RepoRoot "test") -Recurse -File -Filter "*_test.dart" |
                 Where-Object { $WindowsIncompatibleTests -notcontains $_.Name } |
+                Sort-Object FullName |
                 ForEach-Object {
                     Get-RelativePathCompat -BasePath $RepoRoot -TargetPath $_.FullName
                 }
@@ -269,8 +270,9 @@ if (-not $SkipTests) {
 
         # cmd.exe has a much shorter command-line limit than Linux. Passing all
         # test paths at once can exceed it even though every individual path is
-        # valid. Run deterministic batches instead; a failure in any batch still
-        # aborts the release immediately.
+        # valid. Run deterministic batches instead. If a batch fails, isolate
+        # its files one by one with the expanded reporter so the exact failing
+        # suite is visible instead of hiding behind an aggregate counter.
         $WindowsTestBatchSize = 20
         $BatchCount = [int][Math]::Ceiling($TestFiles.Count / [double]$WindowsTestBatchSize)
         for ($offset = 0; $offset -lt $TestFiles.Count; $offset += $WindowsTestBatchSize) {
@@ -280,8 +282,24 @@ if (-not $SkipTests) {
             )
             $batch = @($TestFiles[$offset..$end])
             $batchNumber = [int]($offset / $WindowsTestBatchSize) + 1
-            Invoke-Checked "Flutter tests (Windows batch $batchNumber/$BatchCount)" {
-                Invoke-Flutter test @batch
+            $batchListPath = Join-Path $Logs "windows-test-batch-$batchNumber-files.txt"
+            $batch | Set-Content $batchListPath -Encoding UTF8
+
+            Write-Host "=== Flutter tests (Windows batch $batchNumber/$BatchCount) ==="
+            Invoke-Flutter test @batch
+            $batchExitCode = $LASTEXITCODE
+            if ($batchExitCode -ne 0) {
+                Write-Warning "Windows batch $batchNumber/$BatchCount failed. Isolating its $($batch.Count) test files individually."
+                foreach ($testFile in $batch) {
+                    Write-Host "=== Isolate failing Windows test: $testFile ==="
+                    Invoke-Flutter test --reporter expanded $testFile
+                    $fileExitCode = $LASTEXITCODE
+                    if ($fileExitCode -ne 0) {
+                        throw "Windows test failed: $testFile (exit code $fileExitCode)."
+                    }
+                }
+
+                throw "Windows batch $batchNumber/$BatchCount failed with exit code $batchExitCode, but every file passed individually. This indicates a batch interaction or flaky/concurrency issue and must be investigated before release."
             }
         }
     } else {
