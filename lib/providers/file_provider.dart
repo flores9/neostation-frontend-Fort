@@ -431,10 +431,10 @@ class FileProvider extends ChangeNotifier {
       for (final sub in subdirs) {
         for (final extension in extList) {
           candidates.add(
-            path.joinAll([
-              systemMediaPath,
+            path.posix.joinAll([
+              systemMediaPath.replaceAll('\\', '/'),
               category,
-              if (sub.isNotEmpty) sub,
+              if (sub.isNotEmpty) sub.replaceAll('\\', '/'),
               '$baseName.$extension',
             ]),
           );
