@@ -347,6 +347,7 @@ class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
   }
 
   Future<void> _resetField(String field) async {
+    final configProvider = context.read<SqliteConfigProvider>();
     setState(() => _saving = true);
     try {
       if (field == 'rom') {
@@ -355,9 +356,7 @@ class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
           null,
         );
         _romController.clear();
-        await context.read<SqliteConfigProvider>().rescanSystemSilent(
-          widget.system,
-        );
+        await configProvider.rescanSystemSilent(widget.system);
       } else if (field == 'media') {
         await ConfigService.setFortSystemMediaOverride(
           widget.system.folderName,
@@ -383,6 +382,7 @@ class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
 
   Future<void> _save() async {
     if (_saving) return;
+    final configProvider = context.read<SqliteConfigProvider>();
     setState(() => _saving = true);
     try {
       final previousRom = _snapshot['romManual'];
@@ -403,19 +403,17 @@ class _FortSystemPathsDialogState extends State<_FortSystemPathsDialog> {
           ? null
           : _romController.text.trim();
       if (previousRom != newRom) {
-        await context.read<SqliteConfigProvider>().rescanSystemSilent(
-          widget.system,
-        );
+        await configProvider.rescanSystemSilent(widget.system);
       }
 
       if (!mounted) return;
-      Navigator.of(context).pop();
       AppNotification.showNotification(
         context,
         'Fort paths saved. Manual values take priority; re-run ES-DE import '
         'after changing the gamelist.',
         type: NotificationType.success,
       );
+      Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       AppNotification.showNotification(
