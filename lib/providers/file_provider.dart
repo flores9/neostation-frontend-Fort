@@ -161,8 +161,9 @@ class FileProvider extends ChangeNotifier {
         RegExp(r'^\d+$').hasMatch(ext) || RegExp(r'^v\d+').hasMatch(ext);
     if (isVersion) return romName;
     if (_commonRomExts.contains(ext)) return romName.substring(0, lastDot);
-    if (ext.length <= 4 && !ext.contains(' '))
+    if (ext.length <= 4 && !ext.contains(' ')) {
       return romName.substring(0, lastDot);
+    }
     return romName;
   }
 
@@ -229,8 +230,9 @@ class FileProvider extends ChangeNotifier {
   }
 
   String getAbsolutePath(String relativePath) {
-    if (!_isInitialized || _userDataPath == null)
+    if (!_isInitialized || _userDataPath == null) {
       return path.join(userDataFolder, relativePath);
+    }
     return path.join(_userDataPath!, relativePath);
   }
 
@@ -372,8 +374,9 @@ class FileProvider extends ChangeNotifier {
           final fn = r['folder_name']?.toString();
           final file = r['filename']?.toString();
           final sub = r['subdir']?.toString();
-          if (fn == null || file == null || sub == null || sub.isEmpty)
+          if (fn == null || file == null || sub == null || sub.isEmpty) {
             continue;
+          }
           final base = _stripRomExtension(file, fn);
           subdirs[_esdeSubdirKey(fn, base)] = sub;
         }
