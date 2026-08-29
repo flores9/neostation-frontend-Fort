@@ -594,6 +594,10 @@ class EsdeImportService {
   @visibleForTesting
   static List<XmlElement> selectGamesForTest(
     XmlNode doc,
-    String systemMediaDirectory,
-  ) => _selectGames(doc, systemMediaDirectory);
+    String esdeRoot,
+    String esdeDirName,
+  ) => _selectGames(
+    doc,
+    path.join(esdeRoot, 'downloaded_media', esdeDirName),
+  );
 }
