@@ -103,11 +103,14 @@ void main() {
     test('reads ES-DE art when NeoStation has none of its own', () async {
       for (final type in mediaTypes) {
         final esdeFile = await writeEsdeAsset(esdeCategoryFor[type]!);
+        final expectedEsdePath = path.posix.normalize(
+          esdeFile.path.replaceAll(r'\', '/'),
+        );
 
         expect(
           game.getImagePath('snes', type, provider),
-          esdeFile.path,
-          reason: '$type should fall back to ES-DE art',
+          expectedEsdePath,
+          reason: '$type should fall back to ES-DE art using POSIX paths',
         );
       }
     });
