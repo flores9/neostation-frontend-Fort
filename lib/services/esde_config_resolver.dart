@@ -16,6 +16,30 @@ class EsdePathSettings {
   });
 }
 
+/// One system declared by ES-DE.
+///
+/// This is deliberately a *library platform* definition, not an emulator
+/// profile. Several ES-DE systems can legitimately map to the same NeoStation
+/// emulator profile (for example `amstradcpc` and `gx4000` -> `cpc`) while
+/// remaining distinct platforms with their own ROMs, gamelist and media.
+class EsdeSystemDefinition {
+  final String name;
+  final String fullName;
+  final String? romDirectory;
+  final String? theme;
+  final List<String> platformTags;
+  final List<String> extensions;
+
+  const EsdeSystemDefinition({
+    required this.name,
+    required this.fullName,
+    this.romDirectory,
+    this.theme,
+    this.platformTags = const [],
+    this.extensions = const [],
+  });
+}
+
 /// Effective ES-DE paths for one system.
 ///
 /// Paths in this model are read-only inputs. NeoStation must never write to an
@@ -48,10 +72,14 @@ class EsdeResolvedConfig {
   final EsdePathSettings settings;
   final Map<String, String> customSystemRomPaths;
 
+  /// ES-DE systems keyed by their lower-case `<name>`.
+  final Map<String, EsdeSystemDefinition> systems;
+
   const EsdeResolvedConfig({
     required this.esdeRoot,
     required this.settings,
     required this.customSystemRomPaths,
+    this.systems = const {},
   });
 
   String get mediaRoot =>
@@ -127,17 +155,23 @@ class EsdeConfigResolver {
         ? parseSettings(await settingsFile.readAsString())
         : const EsdePathSettings();
 
-    final customPaths = customSystemsFile.existsSync()
-        ? parseCustomSystemPaths(
+    final systems = customSystemsFile.existsSync()
+        ? parseCustomSystems(
             await customSystemsFile.readAsString(),
             romDirectory: settings.romDirectory,
           )
-        : const <String, String>{};
+        : const <String, EsdeSystemDefinition>{};
+    final customPaths = <String, String>{
+      for (final entry in systems.entries)
+        if (entry.value.romDirectory != null)
+          entry.key: entry.value.romDirectory!,
+    };
 
     return EsdeResolvedConfig(
       esdeRoot: normalizedRoot,
       settings: settings,
       customSystemRomPaths: Map.unmodifiable(customPaths),
+      systems: Map.unmodifiable(systems),
     );
   }
 
@@ -173,26 +207,68 @@ class EsdeConfigResolver {
     );
   }
 
-  /// Parses custom ES-DE system ROM paths keyed case-insensitively by system.
-  static Map<String, String> parseCustomSystemPaths(
+  /// Parses complete custom ES-DE system definitions keyed case-insensitively
+  /// by `<name>`.
+  ///
+  /// Keeping `fullname`, `theme` and the original ES-DE identity is important:
+  /// NeoStation's `folders` list is an emulator-profile compatibility list and
+  /// must not be used to collapse several ES-DE platforms into one library.
+  static Map<String, EsdeSystemDefinition> parseCustomSystems(
     String contents, {
     String? romDirectory,
   }) {
     final fragment = XmlDocumentFragment.parse(contents);
-    final result = <String, String>{};
+    final result = <String, EsdeSystemDefinition>{};
 
     for (final system in fragment.findAllElements('system')) {
       final name = system.getElement('name')?.innerText.trim();
-      final rawPath = system.getElement('path')?.innerText.trim();
-      if (name == null || name.isEmpty || rawPath == null || rawPath.isEmpty) {
-        continue;
-      }
+      if (name == null || name.isEmpty) continue;
 
-      final resolved = _resolveSystemPath(rawPath, romDirectory: romDirectory);
-      if (resolved != null) result[name.toLowerCase()] = resolved;
+      final rawPath = system.getElement('path')?.innerText.trim();
+      final resolvedPath = rawPath == null || rawPath.isEmpty
+          ? null
+          : _resolveSystemPath(rawPath, romDirectory: romDirectory);
+      final fullNameRaw = system.getElement('fullname')?.innerText.trim();
+      final themeRaw = system.getElement('theme')?.innerText.trim();
+      final platformRaw = system.getElement('platform')?.innerText.trim();
+      final extensionRaw = system.getElement('extension')?.innerText.trim();
+
+      result[name.toLowerCase()] = EsdeSystemDefinition(
+        name: name,
+        fullName: fullNameRaw == null || fullNameRaw.isEmpty
+            ? name
+            : fullNameRaw,
+        romDirectory: resolvedPath,
+        theme: themeRaw == null || themeRaw.isEmpty ? null : themeRaw,
+        platformTags: _splitTokens(platformRaw, commaAware: true),
+        extensions: _splitTokens(extensionRaw),
+      );
     }
 
     return result;
+  }
+
+  /// Backwards-compatible path-only view used by existing Fort code.
+  static Map<String, String> parseCustomSystemPaths(
+    String contents, {
+    String? romDirectory,
+  }) {
+    final systems = parseCustomSystems(contents, romDirectory: romDirectory);
+    return <String, String>{
+      for (final entry in systems.entries)
+        if (entry.value.romDirectory != null)
+          entry.key: entry.value.romDirectory!,
+    };
+  }
+
+  static List<String> _splitTokens(String? value, {bool commaAware = false}) {
+    if (value == null || value.trim().isEmpty) return const [];
+    final normalized = commaAware ? value.replaceAll(',', ' ') : value;
+    return normalized
+        .split(RegExp(r'\s+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
   }
 
   static String? _resolveSystemPath(
