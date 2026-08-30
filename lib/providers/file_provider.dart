@@ -25,7 +25,7 @@ class FileProvider extends ChangeNotifier {
   Map<String, Set<String>> _systemExtensions = {};
 
   String? _esdeRoot;
-  Map<String, String> _esdeSystemMediaPaths = {};
+  Map<String, List<String>> _esdeSystemMediaPaths = {};
   Map<String, String> _manualSystemMediaPaths = {};
   Map<String, String> _esdeMediaSubdirs = {};
 
@@ -321,6 +321,16 @@ class FileProvider extends ChangeNotifier {
     return path.join(_mediaPath!, mediaFolder);
   }
 
+  static void _addEsdeMediaPath(
+    Map<String, List<String>> map,
+    String systemFolder,
+    String candidate,
+  ) {
+    final key = systemFolder.toLowerCase();
+    final paths = map.putIfAbsent(key, () => <String>[]);
+    if (!paths.contains(candidate)) paths.add(candidate);
+  }
+
   Future<void> _loadEsdeConfig() async {
     try {
       final overrides = await FortSystemPathService.loadAll(forceReload: true);
@@ -343,7 +353,7 @@ class FileProvider extends ChangeNotifier {
           ? rootRaw.trim()
           : null;
 
-      final map = <String, String>{};
+      final map = <String, List<String>>{};
       if (_esdeRoot != null) {
         final resolved = await EsdeConfigResolver.load(_esdeRoot!);
         final rows = await db.rawQuery('''
@@ -356,7 +366,37 @@ class FileProvider extends ChangeNotifier {
           final fn = r['folder_name']?.toString();
           final esdeSystem = r['esde_media_dir']?.toString();
           if (fn == null || esdeSystem == null || esdeSystem.isEmpty) continue;
-          map[fn] = resolved.forSystem(esdeSystem).mediaDirectory;
+          _addEsdeMediaPath(
+            map,
+            fn,
+            resolved.forSystem(esdeSystem).mediaDirectory,
+          );
+          _addEsdeMediaPath(map, fn, resolved.forSystem(fn).mediaDirectory);
+        }
+
+        // One NeoStation system can intentionally own several ES-DE folders.
+        // Amstrad CPC is a real example: NeoStation's `cpc` definition accepts
+        // both `amstradcpc` and `gx4000`, while ES-DE keeps separate media
+        // trees for those names. `user_system_settings.esde_media_dir` can only
+        // retain one alias, so probing that value alone makes whichever alias
+        // was imported last hide the media of the others. Keep the stored alias
+        // first, then add every known alias for the same NeoStation system.
+        final aliases = await db.rawQuery('''
+          SELECT s.folder_name AS folder_name, f.folder_name AS alias
+          FROM app_system_folders f
+          JOIN app_systems s ON s.id = f.system_id
+          ORDER BY s.folder_name COLLATE NOCASE, f.folder_name COLLATE NOCASE
+        ''');
+        for (final r in aliases) {
+          final fn = r['folder_name']?.toString();
+          final alias = r['alias']?.toString();
+          if (fn == null || alias == null || alias.trim().isEmpty) continue;
+          if (!map.containsKey(fn.toLowerCase())) continue;
+          _addEsdeMediaPath(
+            map,
+            fn,
+            resolved.forSystem(alias).mediaDirectory,
+          );
         }
       }
       _esdeSystemMediaPaths = map;
@@ -407,9 +447,11 @@ class FileProvider extends ChangeNotifier {
     )?.mediaDirectory;
     final manualPath =
         liveManual ?? _manualSystemMediaPaths[systemFolderName.toLowerCase()];
-    final systemMediaPath =
-        manualPath ?? _esdeSystemMediaPaths[systemFolderName];
-    if (systemMediaPath == null) return const [];
+    final systemMediaPaths = manualPath != null
+        ? <String>[manualPath]
+        : _esdeSystemMediaPaths[systemFolderName.toLowerCase()] ??
+              const <String>[];
+    if (systemMediaPaths.isEmpty) return const [];
 
     final mapped = _esdeMediaCategories[imageType];
     if (mapped == null) return const [];
@@ -427,17 +469,19 @@ class FileProvider extends ChangeNotifier {
     final extList = extensions ?? _esdeMediaExtensions;
 
     final candidates = <String>[];
-    for (final category in categories) {
-      for (final sub in subdirs) {
-        for (final extension in extList) {
-          candidates.add(
-            path.posix.joinAll([
-              systemMediaPath.replaceAll('\\', '/'),
-              category,
-              if (sub.isNotEmpty) sub.replaceAll('\\', '/'),
-              '$baseName.$extension',
-            ]),
-          );
+    for (final systemMediaPath in systemMediaPaths) {
+      for (final category in categories) {
+        for (final sub in subdirs) {
+          for (final extension in extList) {
+            candidates.add(
+              path.posix.joinAll([
+                systemMediaPath.replaceAll('\\', '/'),
+                category,
+                if (sub.isNotEmpty) sub.replaceAll('\\', '/'),
+                '$baseName.$extension',
+              ]),
+            );
+          }
         }
       }
     }
