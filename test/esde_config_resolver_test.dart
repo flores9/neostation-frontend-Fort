@@ -45,6 +45,69 @@ void main() {
       expect(paths['ps2'], '/storage/emulated/0/ROMs/ps2');
     });
 
+    test('preserves distinct ES-DE platforms that share an emulator profile', () {
+      const xml = '''
+<systemList>
+  <system>
+    <name>amstradcpc</name>
+    <fullname>Amstrad CPC</fullname>
+    <path>/storage/14F5-471E/ROMs/amstradcpc</path>
+    <extension>.dsk .m3u</extension>
+    <platform>amstradcpc</platform>
+    <theme>amstradcpc</theme>
+  </system>
+  <system>
+    <name>gx4000</name>
+    <fullname>Amstrad GX4000</fullname>
+    <path>/storage/14F5-471E/ROMs/gx4000</path>
+    <extension>.zip .bin</extension>
+    <platform>gx4000</platform>
+    <theme>gx4000</theme>
+  </system>
+</systemList>
+''';
+
+      final systems = EsdeConfigResolver.parseCustomSystems(xml);
+
+      expect(systems.keys, containsAll(<String>['amstradcpc', 'gx4000']));
+      expect(systems['amstradcpc']!.fullName, 'Amstrad CPC');
+      expect(systems['amstradcpc']!.theme, 'amstradcpc');
+      expect(systems['amstradcpc']!.platformTags, ['amstradcpc']);
+      expect(systems['amstradcpc']!.extensions, ['.dsk', '.m3u']);
+      expect(systems['gx4000']!.fullName, 'Amstrad GX4000');
+      expect(
+        systems['gx4000']!.romDirectory,
+        '/storage/14F5-471E/ROMs/gx4000',
+      );
+    });
+
+    test('preserves megadrive and megadrivejp as separate ES-DE platforms', () {
+      const xml = '''
+<systemList>
+  <system>
+    <name>megadrive</name>
+    <fullname>Sega Mega Drive</fullname>
+    <path>/roms/megadrive</path>
+    <platform>megadrive</platform>
+  </system>
+  <system>
+    <name>megadrivejp</name>
+    <fullname>Sega Mega Drive Japan</fullname>
+    <path>/roms/megadrivejp</path>
+    <platform>megadrive</platform>
+  </system>
+</systemList>
+''';
+
+      final systems = EsdeConfigResolver.parseCustomSystems(xml);
+
+      expect(systems.length, 2);
+      expect(systems['megadrive']!.name, 'megadrive');
+      expect(systems['megadrivejp']!.name, 'megadrivejp');
+      expect(systems['megadrive']!.romDirectory, '/roms/megadrive');
+      expect(systems['megadrivejp']!.romDirectory, '/roms/megadrivejp');
+    });
+
     test('does not guess unresolved percent ROMPATH', () {
       const xml = '''
 <systemList>
