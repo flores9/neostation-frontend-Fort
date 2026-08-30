@@ -4,6 +4,7 @@ import '../models/database_game_model.dart';
 import '../data/datasources/sqlite_database_service.dart';
 import '../data/datasources/sqlite_service.dart';
 import '../providers/file_provider.dart';
+import '../services/fort_esde_library_service.dart';
 import '../services/saf_directory_service.dart';
 
 /// Repository for game data access operations.
@@ -13,21 +14,50 @@ class GameRepository {
       SqliteDatabaseService.loadDatabase();
 
   /// Returns all games registered for [systemFolderName].
+  ///
+  /// A Fort ES-DE library platform (`gx4000`, `amiga1200`, ...) is filtered by
+  /// its source provenance. Native NeoStation systems continue through the
+  /// unchanged upstream data source.
   static Future<List<DatabaseGameModel>> loadGamesForSystem(
     String systemFolderName,
-  ) => SqliteDatabaseService.loadGamesForSystem(systemFolderName);
+  ) async {
+    if (await FortEsdeLibraryService.isLibraryPlatform(systemFolderName)) {
+      return FortEsdeLibraryService.getGamesForPlatform(systemFolderName);
+    }
+    return SqliteDatabaseService.loadGamesForSystem(systemFolderName);
+  }
 
   /// Toggles favorite status for a game.
   static Future<void> toggleFavorite(
     String systemFolderName,
     String filename,
-  ) => SqliteDatabaseService.toggleFavorite(systemFolderName, filename);
+  ) async {
+    if (await FortEsdeLibraryService.isLibraryPlatform(systemFolderName)) {
+      final romPath = await FortEsdeLibraryService.findRomPath(
+        systemFolderName,
+        filename,
+      );
+      if (romPath != null) await SqliteService.toggleRomFavorite(romPath);
+      return;
+    }
+    await SqliteDatabaseService.toggleFavorite(systemFolderName, filename);
+  }
 
   /// Records that a game was played (updates timestamp and play stats).
   static Future<void> recordGamePlayed(
     String systemFolderName,
     String filename,
-  ) => SqliteDatabaseService.recordGamePlayed(systemFolderName, filename);
+  ) async {
+    if (await FortEsdeLibraryService.isLibraryPlatform(systemFolderName)) {
+      final romPath = await FortEsdeLibraryService.findRomPath(
+        systemFolderName,
+        filename,
+      );
+      if (romPath != null) await SqliteService.recordRomPlayed(romPath);
+      return;
+    }
+    await SqliteDatabaseService.recordGamePlayed(systemFolderName, filename);
+  }
 
   /// Persists updated metadata for a game.
   static Future<void> updateGame(
@@ -63,7 +93,18 @@ class GameRepository {
       log.e('deleteGame: appSystemId is null, cannot delete from DB');
       return;
     }
-    await SqliteService.deleteGame(appSystemId, filename);
+
+    // ES-DE sibling platforms can contain the same filename under one
+    // canonical app_system_id. Delete the ROM row by its globally unique path
+    // when that path is available; only fall back to the upstream
+    // system+filename delete for native/legacy callers.
+    if (romPath != null &&
+        await FortEsdeLibraryService.isLibraryPlatform(systemFolderName)) {
+      final db = await SqliteService.getDatabase();
+      await db.delete('user_roms', where: 'rom_path = ?', whereArgs: [romPath]);
+    } else {
+      await SqliteService.deleteGame(appSystemId, filename);
+    }
 
     if (romPath != null) {
       try {
@@ -208,7 +249,8 @@ class GameRepository {
     final db = await SqliteService.getDatabase();
     final result = await db.rawQuery(
       '''
-      SELECT s.folder_name
+      SELECT COALESCE(ur.${FortEsdeLibraryService.romSourceColumn}, s.folder_name)
+        AS folder_name
       FROM user_roms ur
       JOIN app_systems s ON ur.app_system_id = s.id
       WHERE ur.filename = ?
@@ -259,7 +301,9 @@ class GameRepository {
     final db = await SqliteService.getDatabase();
     final result = await db.rawQuery(
       '''
-      SELECT ur.filename, ur.title_name, s.folder_name,
+      SELECT ur.filename, ur.title_name,
+        COALESCE(ur.${FortEsdeLibraryService.romSourceColumn}, s.folder_name)
+          AS folder_name,
         ur.app_emulator_unique_id as emulator_name, ur.rom_path
       FROM user_roms ur
       JOIN app_systems s ON ur.app_system_id = s.id
