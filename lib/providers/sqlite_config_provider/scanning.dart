@@ -585,6 +585,101 @@ extension SqliteConfigScanning on SqliteConfigProvider {
     Map<String, Map<String, String>>? rootFoldersMap,
   }) async {
     try {
+      // Fort treats ES-DE folder names as concrete library platforms while
+      // retaining NeoStation's canonical system id as the emulation profile.
+      // Resolve every ES-DE sibling for this profile and scan all of their ROM
+      // roots in ONE SqliteDatabaseService pass. The upstream scanner performs
+      // orphan cleanup once per call; doing one call per sibling would let the
+      // second source incorrectly delete the first source's rows.
+      final fortSources = await FortEsdeScanPlanService.resolve(
+        system,
+        esdeRoot: _config.esdeFolderPath,
+      );
+
+      if (fortSources.isNotEmpty) {
+        final unavailable = <FortEsdeScanSource>[];
+        for (final source in fortSources) {
+          if (!await ConfigService.isFortRomDirectoryAccessible(
+            source.romDirectory,
+          )) {
+            unavailable.add(source);
+          }
+        }
+
+        if (unavailable.isNotEmpty) {
+          final existingTotal = system.id == null
+              ? system.romCount
+              : await SystemRepository.getRomCountForSystem(system.id!);
+          final missing = unavailable
+              .map((source) => '${source.esdeSystemName}: ${source.romDirectory}')
+              .join(', ');
+          SqliteConfigProvider._log.w(
+            'Fort grouped ROM source unavailable for ${system.realName}: '
+            '$missing. Existing database rows are preserved.',
+          );
+          GlobalNotificationService().show(
+            id: '$_fortRomPathNotificationPrefix${system.folderName}',
+            title: '${system.realName} ROM storage unavailable',
+            message:
+                'At least one ES-DE platform mapped to this emulator profile '
+                'cannot be read. Existing games were kept; reconnect storage '
+                'or re-grant access.',
+            type: GlobalNotificationType.error,
+          );
+          return ScanSummary(
+            added: 0,
+            removed: 0,
+            total: existingTotal,
+            systemName: system.realName,
+          );
+        }
+
+        GlobalNotificationService().dismiss(
+          '$_fortRomPathNotificationPrefix${system.folderName}',
+        );
+
+        final scanRoots = <String>[];
+        final exactMaps = <String, Map<String, String>>{};
+        for (final source in fortSources) {
+          await FortEsdeLibraryService.upsertPlatform(
+            esdeSystemName: source.esdeSystemName,
+            appSystemId: system.id!,
+            displayName: source.displayName,
+            romDirectory: source.romDirectory,
+            mediaDirectory: source.mediaDirectory,
+            gamelistFile: source.gamelistFile,
+            theme: source.theme,
+            platformTags: source.platformTags,
+          );
+
+          if (!scanRoots.contains(source.romDirectory)) {
+            scanRoots.add(source.romDirectory);
+          }
+          exactMaps
+              .putIfAbsent(source.romDirectory, () => <String, String>{})
+              [source.esdeSystemName.toLowerCase()] = source.romDirectory;
+        }
+
+        final summary = await SqliteDatabaseService.scanSystemRoms(
+          system,
+          scanRoots,
+          ignoreHiddenFiles: _config.ignoreHiddenFiles,
+          rootFoldersMap: exactMaps,
+        );
+        final tagged = await FortEsdeLibraryService.reconcileRomProvenance();
+        SqliteConfigProvider._log.i(
+          'Fort grouped ScanResult[${system.realName}] '
+          'sources=${fortSources.map((s) => s.esdeSystemName).join(',')}: '
+          'added=${summary.added} removed=${summary.removed} '
+          'total=${summary.total} provenanceTagged=$tagged',
+        );
+        await refreshSystem(system, rootFoldersMap: exactMaps);
+        if (system.folderName == 'steam') {
+          SteamScraperService.scrapeSteamGames();
+        }
+        return summary;
+      }
+
       final direct = await ConfigService.getFortSystemRomDirectory(
         system,
         esdeRoot: _config.esdeFolderPath,
