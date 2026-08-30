@@ -455,7 +455,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                           fontWeight: FontWeight.bold,
                           color: isCurrent
                               ? Colors.white
-                              : theme.colorScheme.primary.withValues(alpha: 0.5),
+                              : theme.colorScheme.primary.withValues(
+                                  alpha: 0.5,
+                                ),
                         ),
                       ),
               ),
@@ -513,7 +515,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                             fontWeight: FontWeight.bold,
                             color: isCurrent
                                 ? Colors.white
-                                : theme.colorScheme.primary.withValues(alpha: 0.5),
+                                : theme.colorScheme.primary.withValues(
+                                    alpha: 0.5,
+                                  ),
                           ),
                         ),
                 ),
@@ -664,7 +668,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
           try {
             final uri = await PermissionService.requestFolderAccess();
             if (uri != null) {
-              selected = UserDataLocationService.safUriToRealPath(uri.toString());
+              selected = UserDataLocationService.safUriToRealPath(
+                uri.toString(),
+              );
             }
           } on PlatformException catch (e) {
             if (e.code == 'PICKER_FAILED' && mounted) {
@@ -684,7 +690,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
         selected = selected.substring(0, selected.length - 1);
       }
       if (selected == _selectedUserDataPath) return;
-      final entryCount = await UserDataLocationService.countDirectoryEntries(selected);
+      final entryCount = await UserDataLocationService.countDirectoryEntries(
+        selected,
+      );
       if (!mounted) return;
       if (entryCount > 0) {
         final proceed = await FolderNotEmptyDialog.show(
@@ -696,7 +704,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
       }
       await UserDataLocationService.setCustomPath(selected);
       if (!mounted) return;
-      final configProvider = Provider.of<SqliteConfigProvider>(context, listen: false);
+      final configProvider = Provider.of<SqliteConfigProvider>(
+        context,
+        listen: false,
+      );
       await configProvider.reinitialize();
       if (mounted) setState(() => _selectedUserDataPath = selected);
     } catch (e) {
@@ -766,7 +777,11 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: iconSize, color: granted ? Colors.green : theme.colorScheme.primary),
+          Icon(
+            icon,
+            size: iconSize,
+            color: granted ? Colors.green : theme.colorScheme.primary,
+          ),
           SizedBox(width: isLandscape ? 12.r : 16.r),
           Expanded(
             child: Column(
@@ -785,7 +800,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                   granted ? AppLocale.enabled.getString(context) : description,
                   style: TextStyle(
                     fontSize: textSize,
-                    color: granted ? Colors.green : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                    color: granted
+                        ? Colors.green
+                        : theme.colorScheme.onSurface.withValues(alpha: 0.7),
                     height: 1.3,
                   ),
                 ),
@@ -806,9 +823,13 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
           ),
           SizedBox(width: isLandscape ? 8.r : 12.r),
           Icon(
-            granted ? Symbols.check_circle_rounded : Symbols.radio_button_unchecked_rounded,
+            granted
+                ? Symbols.check_circle_rounded
+                : Symbols.radio_button_unchecked_rounded,
             size: isLandscape ? 20.r : 26.r,
-            color: granted ? Colors.green : theme.colorScheme.onSurface.withValues(alpha: 0.3),
+            color: granted
+                ? Colors.green
+                : theme.colorScheme.onSurface.withValues(alpha: 0.3),
           ),
         ],
       ),
@@ -828,7 +849,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
           Icon(
             Symbols.folder_open_rounded,
             size: iconSize,
-            color: _selectedFolder != null ? Colors.green : theme.colorScheme.primary,
+            color: _selectedFolder != null
+                ? Colors.green
+                : theme.colorScheme.primary,
           ),
           SizedBox(height: isLandscape ? 16.r : 24.r),
           Text(
@@ -878,7 +901,11 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                 ),
                 child: Center(
                   child: provider.scanCompleted
-                      ? Icon(Symbols.check_circle_rounded, color: Colors.green, size: iconSize)
+                      ? Icon(
+                          Symbols.check_circle_rounded,
+                          color: Colors.green,
+                          size: iconSize,
+                        )
                       : SizedBox(
                           width: iconSize,
                           height: iconSize,
@@ -912,15 +939,20 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                 ),
                 textAlign: TextAlign.center,
               ),
-              if (provider.totalSystemsToScan > 0 && !provider.scanCompleted) ...[
+              if (provider.totalSystemsToScan > 0 &&
+                  !provider.scanCompleted) ...[
                 SizedBox(height: isLandscape ? 4.r : 32.r),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8.r),
                   child: LinearProgressIndicator(
                     value: provider.scanProgress,
                     minHeight: 8.r,
-                    backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.1),
-                    valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+                    backgroundColor: theme.colorScheme.primary.withValues(
+                      alpha: 0.1,
+                    ),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      theme.colorScheme.primary,
+                    ),
                   ),
                 ),
                 SizedBox(height: 8.r),
@@ -928,12 +960,21 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      AppLocale.ofSystems.getString(context)
-                          .replaceFirst('{scanned}', provider.scannedSystemsCount.toString())
-                          .replaceFirst('{total}', provider.totalSystemsToScan.toString()),
+                      AppLocale.ofSystems
+                          .getString(context)
+                          .replaceFirst(
+                            '{scanned}',
+                            provider.scannedSystemsCount.toString(),
+                          )
+                          .replaceFirst(
+                            '{total}',
+                            provider.totalSystemsToScan.toString(),
+                          ),
                       style: TextStyle(
                         fontSize: textSize - 2.r,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.6,
+                        ),
                       ),
                     ),
                     Text(
@@ -954,16 +995,26 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                   decoration: BoxDecoration(
                     color: Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12.r),
-                    border: Border.all(color: Colors.green.withValues(alpha: 0.3), width: 1.r),
+                    border: Border.all(
+                      color: Colors.green.withValues(alpha: 0.3),
+                      width: 1.r,
+                    ),
                   ),
                   child: Row(
                     children: [
-                      Icon(Symbols.check_circle_rounded, color: Colors.green, size: isLandscape ? 20.r : 24.r),
+                      Icon(
+                        Symbols.check_circle_rounded,
+                        color: Colors.green,
+                        size: isLandscape ? 20.r : 24.r,
+                      ),
                       SizedBox(width: 12.r),
                       Expanded(
                         child: Text(
                           '${AppLocale.foundSystemsWithGames.getString(context).replaceFirst('{count}', provider.detectedRealSystems.length.toString())}\n${AppLocale.wizardTapNextToContinue.getString(context)}',
-                          style: TextStyle(fontSize: textSize, color: Colors.green[700]),
+                          style: TextStyle(
+                            fontSize: textSize,
+                            color: Colors.green[700],
+                          ),
                         ),
                       ),
                     ],
@@ -989,7 +1040,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            result != null ? Symbols.check_circle_rounded : Symbols.download_for_offline_rounded,
+            result != null
+                ? Symbols.check_circle_rounded
+                : Symbols.download_for_offline_rounded,
             size: iconSize,
             color: result != null ? Colors.green : theme.colorScheme.primary,
           ),
@@ -1036,8 +1089,12 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                 child: LinearProgressIndicator(
                   value: _esdeProgress > 0 ? _esdeProgress : null,
                   minHeight: 8.r,
-                  backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.1),
-                  valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+                  backgroundColor: theme.colorScheme.primary.withValues(
+                    alpha: 0.1,
+                  ),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    theme.colorScheme.primary,
+                  ),
                 ),
               ),
             ),
@@ -1060,19 +1117,29 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
               decoration: BoxDecoration(
                 color: Colors.green.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: Colors.green.withValues(alpha: 0.3), width: 1.r),
+                border: Border.all(
+                  color: Colors.green.withValues(alpha: 0.3),
+                  width: 1.r,
+                ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Symbols.check_circle_rounded, color: Colors.green, size: isLandscape ? 20.r : 24.r),
+                  Icon(
+                    Symbols.check_circle_rounded,
+                    color: Colors.green,
+                    size: isLandscape ? 20.r : 24.r,
+                  ),
                   SizedBox(width: 12.r),
                   Flexible(
                     child: Text(
                       '${AppLocale.esdeImportComplete.getString(context)}\n'
                       '${result.gamesImported} ${AppLocale.esdeSummaryGames.getString(context)}, '
                       '${result.systemsMatched} ${AppLocale.esdeSummarySystems.getString(context)}',
-                      style: TextStyle(fontSize: textSize, color: Colors.green[700]),
+                      style: TextStyle(
+                        fontSize: textSize,
+                        color: Colors.green[700],
+                      ),
                     ),
                   ),
                 ],
@@ -1099,14 +1166,20 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                hasTheme ? Symbols.check_circle_rounded : Symbols.palette_rounded,
+                hasTheme
+                    ? Symbols.check_circle_rounded
+                    : Symbols.palette_rounded,
                 size: iconSize * 0.7,
                 color: hasTheme ? Colors.green : theme.colorScheme.primary,
               ),
               SizedBox(height: isLandscape ? 10.r : 16.r),
               Text(
                 AppLocale.wizardArtPackTitle.getString(context),
-                style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface),
+                style: TextStyle(
+                  fontSize: titleSize,
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
+                ),
                 textAlign: TextAlign.center,
               ),
               SizedBox(height: isLandscape ? 6.r : 12.r),
@@ -1116,14 +1189,23 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                     : unavailable
                     ? AppLocale.wizardArtPackUnavailable.getString(context)
                     : AppLocale.wizardArtPackDesc.getString(context),
-                style: TextStyle(fontSize: textSize, color: theme.colorScheme.onSurface.withValues(alpha: 0.7), height: 1.3),
+                style: TextStyle(
+                  fontSize: textSize,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                  height: 1.3,
+                ),
                 textAlign: TextAlign.center,
               ),
               if (!hasTheme && !unavailable && !neoAssets.downloading) ...[
                 Builder(
                   builder: (context) {
-                    final recommended = neoAssets.themes.firstWhere((t) => !t.isAi, orElse: () => neoAssets.themes.first);
-                    final previewUrl = NeoAssetsTheme.normalizePreviewUrl(recommended.previewUrl);
+                    final recommended = neoAssets.themes.firstWhere(
+                      (t) => !t.isAi,
+                      orElse: () => neoAssets.themes.first,
+                    );
+                    final previewUrl = NeoAssetsTheme.normalizePreviewUrl(
+                      recommended.previewUrl,
+                    );
                     if (previewUrl.isEmpty) return const SizedBox.shrink();
                     final thumbWidth = isLandscape ? 120.r : 150.r;
                     return Padding(
@@ -1132,7 +1214,12 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                         width: thumbWidth,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(10.r),
-                          border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.3), width: 1.r),
+                          border: Border.all(
+                            color: theme.colorScheme.primary.withValues(
+                              alpha: 0.3,
+                            ),
+                            width: 1.r,
+                          ),
                         ),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(9.r),
@@ -1141,10 +1228,19 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                             child: Image.network(
                               previewUrl,
                               fit: BoxFit.cover,
-                              loadingBuilder: (_, child, progress) => progress == null ? child : Container(color: theme.colorScheme.surface),
+                              loadingBuilder: (_, child, progress) =>
+                                  progress == null
+                                  ? child
+                                  : Container(color: theme.colorScheme.surface),
                               errorBuilder: (_, _, _) => Container(
                                 color: theme.colorScheme.surface,
-                                child: Icon(Symbols.image_rounded, size: 24.r, color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
+                                child: Icon(
+                                  Symbols.image_rounded,
+                                  size: 24.r,
+                                  color: theme.colorScheme.onSurface.withValues(
+                                    alpha: 0.3,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -1161,17 +1257,27 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8.r),
                     child: LinearProgressIndicator(
-                      value: neoAssets.downloadProgress > 0 ? neoAssets.downloadProgress : null,
+                      value: neoAssets.downloadProgress > 0
+                          ? neoAssets.downloadProgress
+                          : null,
                       minHeight: 8.r,
-                      backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.1),
-                      valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+                      backgroundColor: theme.colorScheme.primary.withValues(
+                        alpha: 0.1,
+                      ),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        theme.colorScheme.primary,
+                      ),
                     ),
                   ),
                 ),
                 SizedBox(height: 8.r),
                 Text(
                   '${(neoAssets.downloadProgress * 100).toInt()}%',
-                  style: TextStyle(fontSize: textSize, color: theme.colorScheme.primary, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: textSize,
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ],
@@ -1208,7 +1314,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     // Reuse a root already selected/detected in the earlier folder step. Only
     // open the ES-DE picker when setup has no ES-DE root yet.
     String? selected = _selectedEsdePath;
-    final configured = context.read<SqliteConfigProvider>().config.esdeFolderPath;
+    final configured = context
+        .read<SqliteConfigProvider>()
+        .config
+        .esdeFolderPath;
     if ((selected == null || selected.isEmpty) &&
         configured != null &&
         configured.trim().isNotEmpty) {
@@ -1262,11 +1371,19 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     setState(() => _selectedEsdePath = selected);
 
     final localeEsdeImporting = AppLocale.esdeImporting.getString(context);
-    final localeEsdeImportNotEsdeFolder = AppLocale.esdeImportNotEsdeFolder.getString(context);
-    final localeEsdeImportNothingFound = AppLocale.esdeImportNothingFound.getString(context);
-    final localeEsdeImportComplete = AppLocale.esdeImportComplete.getString(context);
-    final localeEsdeSummaryGames = AppLocale.esdeSummaryGames.getString(context);
-    final localeEsdeSummarySystems = AppLocale.esdeSummarySystems.getString(context);
+    final localeEsdeImportNotEsdeFolder = AppLocale.esdeImportNotEsdeFolder
+        .getString(context);
+    final localeEsdeImportNothingFound = AppLocale.esdeImportNothingFound
+        .getString(context);
+    final localeEsdeImportComplete = AppLocale.esdeImportComplete.getString(
+      context,
+    );
+    final localeEsdeSummaryGames = AppLocale.esdeSummaryGames.getString(
+      context,
+    );
+    final localeEsdeSummarySystems = AppLocale.esdeSummarySystems.getString(
+      context,
+    );
 
     await context.read<SqliteConfigProvider>().updateEsdeFolderPath(selected);
 
@@ -1298,7 +1415,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
           }
           GlobalNotificationService().update(
             id: notificationId,
-            message: label.isEmpty ? localeEsdeImporting : '$localeEsdeImporting: $label',
+            message: label.isEmpty
+                ? localeEsdeImporting
+                : '$localeEsdeImporting: $label',
             type: GlobalNotificationType.info,
             progress: p,
           );
@@ -1362,7 +1481,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     final neoAssets = context.read<NeoAssetsProvider>();
     final themes = neoAssets.themes;
     if (themes.isEmpty) return;
-    final recommended = themes.firstWhere((t) => !t.isAi, orElse: () => themes.first);
+    final recommended = themes.firstWhere(
+      (t) => !t.isAi,
+      orElse: () => themes.first,
+    );
     final systemFolders = context
         .read<SqliteConfigProvider>()
         .availableSystems
@@ -1389,15 +1511,24 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               ElevatedButton(
-                onPressed: provider.scanCompleted ? () => _handleMainAction() : null,
+                onPressed: provider.scanCompleted
+                    ? () => _handleMainAction()
+                    : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: theme.colorScheme.primary,
                   foregroundColor: theme.colorScheme.onPrimary,
-                  padding: EdgeInsets.symmetric(horizontal: 20.r, vertical: 12.r),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 20.r,
+                    vertical: 12.r,
+                  ),
                   elevation: 4,
                   shadowColor: theme.colorScheme.primary.withValues(alpha: 0.4),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                  disabledBackgroundColor: theme.colorScheme.primary.withValues(alpha: 0.3),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16.r),
+                  ),
+                  disabledBackgroundColor: theme.colorScheme.primary.withValues(
+                    alpha: 0.3,
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1411,7 +1542,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                     SizedBox(width: 8.r),
                     Text(
                       AppLocale.next.getString(context),
-                      style: TextStyle(fontSize: 14.r, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: 14.r,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ],
                 ),
@@ -1445,7 +1579,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
               TextButton(
                 onPressed: () => _handleSkip(),
                 style: TextButton.styleFrom(
-                  padding: EdgeInsets.symmetric(horizontal: 16.r, vertical: 8.r),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 16.r,
+                    vertical: 8.r,
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1459,7 +1596,12 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                     SizedBox(width: 8.r),
                     Text(
                       AppLocale.skipForNow.getString(context),
-                      style: TextStyle(fontSize: 12.r, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                      style: TextStyle(
+                        fontSize: 12.r,
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.6,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -1468,7 +1610,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
               SizedBox(width: 64.r),
             ElevatedButton(
               onPressed:
-                  (_isSelectingFolder || _isImportingEsde || _isDownloadingArt || artLoading)
+                  (_isSelectingFolder ||
+                      _isImportingEsde ||
+                      _isDownloadingArt ||
+                      artLoading)
                   ? null
                   : () => _handleMainAction(),
               style: ElevatedButton.styleFrom(
@@ -1477,8 +1622,12 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                 padding: EdgeInsets.symmetric(horizontal: 20.r, vertical: 12.r),
                 elevation: 4,
                 shadowColor: theme.colorScheme.primary.withValues(alpha: 0.4),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                disabledBackgroundColor: theme.colorScheme.primary.withValues(alpha: 0.3),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16.r),
+                ),
+                disabledBackgroundColor: theme.colorScheme.primary.withValues(
+                  alpha: 0.3,
+                ),
               ),
               child: (_isSelectingFolder || artLoading)
                   ? SizedBox(
@@ -1486,7 +1635,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                       height: 20.r,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.r,
-                        valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.onPrimary),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          theme.colorScheme.onPrimary,
+                        ),
                       ),
                     )
                   : Row(
@@ -1501,7 +1652,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
                         SizedBox(width: 8.r),
                         Text(
                           _getButtonText(),
-                          style: TextStyle(fontSize: 14.r, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            fontSize: 14.r,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ],
                     ),
@@ -1520,7 +1674,8 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
       }
       return AppLocale.next.getString(context);
     }
-    if (_currentStep == _stepFolder) return AppLocale.selectFolder.getString(context);
+    if (_currentStep == _stepFolder)
+      return AppLocale.selectFolder.getString(context);
     if (_currentStep == _stepEsde) {
       return _esdeResult != null
           ? AppLocale.next.getString(context)
@@ -1528,7 +1683,8 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     }
     if (_currentStep == _stepArtPack) {
       final neoAssets = context.read<NeoAssetsProvider>();
-      final canDownload = !neoAssets.hasActiveTheme && neoAssets.themes.isNotEmpty;
+      final canDownload =
+          !neoAssets.hasActiveTheme && neoAssets.themes.isNotEmpty;
       return canDownload
           ? AppLocale.wizardDownloadArtPack.getString(context)
           : AppLocale.finish.getString(context);
@@ -1573,7 +1729,8 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     }
     if (_currentStep == _stepArtPack) {
       final neoAssets = context.read<NeoAssetsProvider>();
-      final canDownload = !neoAssets.hasActiveTheme && neoAssets.themes.isNotEmpty;
+      final canDownload =
+          !neoAssets.hasActiveTheme && neoAssets.themes.isNotEmpty;
       if (canDownload) {
         await _downloadWizardArtPack();
       } else {
@@ -1612,7 +1769,10 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     _gamepadNav?.deactivate();
 
     try {
-      final configProvider = Provider.of<SqliteConfigProvider>(context, listen: false);
+      final configProvider = Provider.of<SqliteConfigProvider>(
+        context,
+        listen: false,
+      );
       String? result;
       String? resolvedPath;
 
@@ -1645,7 +1805,8 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
 
       if (result != null && mounted) {
         final esdeCandidate = resolvedPath?.trim();
-        final selectedEsde = esdeCandidate != null &&
+        final selectedEsde =
+            esdeCandidate != null &&
             esdeCandidate.isNotEmpty &&
             _looksLikeEsdeRoot(esdeCandidate);
 
@@ -1683,12 +1844,17 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
 
   Future<void> _finishSetup() async {
     _finishing = true;
-    final configProvider = Provider.of<SqliteConfigProvider>(context, listen: false);
+    final configProvider = Provider.of<SqliteConfigProvider>(
+      context,
+      listen: false,
+    );
     final savedFolder = configProvider.config.romFolder;
     final savedEsde = configProvider.config.esdeFolderPath;
     if ((savedFolder == null || savedFolder.isEmpty) &&
         (savedEsde == null || savedEsde.isEmpty)) {
-      _log.w('Warning: neither a ROM folder nor an ES-DE root was saved in config!');
+      _log.w(
+        'Warning: neither a ROM folder nor an ES-DE root was saved in config!',
+      );
     }
     await configProvider.saveConfig();
     widget.onComplete();

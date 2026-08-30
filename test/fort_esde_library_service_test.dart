@@ -70,31 +70,37 @@ void main() {
       },
     );
 
-    test('exposes sibling ES-DE platforms as separate visible systems', () async {
-      await db.execute(
-        "INSERT INTO user_roms (app_system_id, filename, rom_path) "
-        "VALUES ('cpc', 'CPC Game.dsk', '/roms/amstradcpc/CPC Game.dsk')",
-      );
-      await db.execute(
-        "INSERT INTO user_roms (app_system_id, filename, rom_path) "
-        "VALUES ('cpc', 'GX Game.zip', '/roms/gx4000/GX Game.zip')",
-      );
+    test(
+      'exposes sibling ES-DE platforms as separate visible systems',
+      () async {
+        await db.execute(
+          "INSERT INTO user_roms (app_system_id, filename, rom_path) "
+          "VALUES ('cpc', 'CPC Game.dsk', '/roms/amstradcpc/CPC Game.dsk')",
+        );
+        await db.execute(
+          "INSERT INTO user_roms (app_system_id, filename, rom_path) "
+          "VALUES ('cpc', 'GX Game.zip', '/roms/gx4000/GX Game.zip')",
+        );
 
-      final systems = await FortEsdeLibraryService.getDetectedPlatformSystems();
-      expect(systems, hasLength(2));
+        final systems =
+            await FortEsdeLibraryService.getDetectedPlatformSystems();
+        expect(systems, hasLength(2));
 
-      final cpc = systems.singleWhere(
-        (system) => system.folderName == 'amstradcpc',
-      );
-      final gx = systems.singleWhere((system) => system.folderName == 'gx4000');
+        final cpc = systems.singleWhere(
+          (system) => system.folderName == 'amstradcpc',
+        );
+        final gx = systems.singleWhere(
+          (system) => system.folderName == 'gx4000',
+        );
 
-      expect(cpc.id, 'cpc');
-      expect(gx.id, 'cpc');
-      expect(cpc.realName, 'Amstrad CPC');
-      expect(gx.realName, 'Amstrad GX4000');
-      expect(cpc.romCount, 1);
-      expect(gx.romCount, 1);
-    });
+        expect(cpc.id, 'cpc');
+        expect(gx.id, 'cpc');
+        expect(cpc.realName, 'Amstrad CPC');
+        expect(gx.realName, 'Amstrad GX4000');
+        expect(cpc.romCount, 1);
+        expect(gx.romCount, 1);
+      },
+    );
 
     test('loads games only from the requested ES-DE platform', () async {
       const filename = 'Shared Name.zip';

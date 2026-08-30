@@ -611,7 +611,9 @@ extension SqliteConfigScanning on SqliteConfigProvider {
               ? system.romCount
               : await SystemRepository.getRomCountForSystem(system.id!);
           final missing = unavailable
-              .map((source) => '${source.esdeSystemName}: ${source.romDirectory}')
+              .map(
+                (source) => '${source.esdeSystemName}: ${source.romDirectory}',
+              )
               .join(', ');
           SqliteConfigProvider._log.w(
             'Fort grouped ROM source unavailable for ${system.realName}: '
@@ -655,9 +657,10 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           if (!scanRoots.contains(source.romDirectory)) {
             scanRoots.add(source.romDirectory);
           }
-          exactMaps
-              .putIfAbsent(source.romDirectory, () => <String, String>{})
-              [source.esdeSystemName.toLowerCase()] = source.romDirectory;
+          exactMaps.putIfAbsent(
+            source.romDirectory,
+            () => <String, String>{},
+          )[source.esdeSystemName.toLowerCase()] = source.romDirectory;
         }
 
         final summary = await SqliteDatabaseService.scanSystemRoms(

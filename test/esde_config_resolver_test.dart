@@ -45,8 +45,10 @@ void main() {
       expect(paths['ps2'], '/storage/emulated/0/ROMs/ps2');
     });
 
-    test('preserves distinct ES-DE platforms that share an emulator profile', () {
-      const xml = '''
+    test(
+      'preserves distinct ES-DE platforms that share an emulator profile',
+      () {
+        const xml = '''
 <systemList>
   <system>
     <name>amstradcpc</name>
@@ -67,19 +69,20 @@ void main() {
 </systemList>
 ''';
 
-      final systems = EsdeConfigResolver.parseCustomSystems(xml);
+        final systems = EsdeConfigResolver.parseCustomSystems(xml);
 
-      expect(systems.keys, containsAll(<String>['amstradcpc', 'gx4000']));
-      expect(systems['amstradcpc']!.fullName, 'Amstrad CPC');
-      expect(systems['amstradcpc']!.theme, 'amstradcpc');
-      expect(systems['amstradcpc']!.platformTags, ['amstradcpc']);
-      expect(systems['amstradcpc']!.extensions, ['.dsk', '.m3u']);
-      expect(systems['gx4000']!.fullName, 'Amstrad GX4000');
-      expect(
-        systems['gx4000']!.romDirectory,
-        '/storage/14F5-471E/ROMs/gx4000',
-      );
-    });
+        expect(systems.keys, containsAll(<String>['amstradcpc', 'gx4000']));
+        expect(systems['amstradcpc']!.fullName, 'Amstrad CPC');
+        expect(systems['amstradcpc']!.theme, 'amstradcpc');
+        expect(systems['amstradcpc']!.platformTags, ['amstradcpc']);
+        expect(systems['amstradcpc']!.extensions, ['.dsk', '.m3u']);
+        expect(systems['gx4000']!.fullName, 'Amstrad GX4000');
+        expect(
+          systems['gx4000']!.romDirectory,
+          '/storage/14F5-471E/ROMs/gx4000',
+        );
+      },
+    );
 
     test('preserves megadrive and megadrivejp as separate ES-DE platforms', () {
       const xml = '''

@@ -264,8 +264,7 @@ class FortEsdeLibraryService {
         .toSet();
     if (paths.isEmpty) return const [];
 
-    final displayName =
-        platform['display_name']?.toString() ?? esdeSystemName;
+    final displayName = platform['display_name']?.toString() ?? esdeSystemName;
     final canonicalGames = await SqliteService.getGamesBySystem(profileId);
     return canonicalGames
         .where((game) => paths.contains(game.romPath))

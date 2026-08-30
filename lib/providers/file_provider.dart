@@ -407,11 +407,7 @@ class FileProvider extends ChangeNotifier {
           final alias = r['alias']?.toString();
           if (fn == null || alias == null || alias.trim().isEmpty) continue;
           if (!map.containsKey(fn.toLowerCase())) continue;
-          _addEsdeMediaPath(
-            map,
-            fn,
-            resolved.forSystem(alias).mediaDirectory,
-          );
+          _addEsdeMediaPath(map, fn, resolved.forSystem(alias).mediaDirectory);
         }
       }
       _esdeSystemMediaPaths = map;

@@ -30,8 +30,8 @@ class SystemRepository {
         if (profileId != null) {
           final profile = await getSystemById(profileId);
           if (profile != null) {
-            final detected = await FortEsdeLibraryService
-                .getDetectedPlatformSystems();
+            final detected =
+                await FortEsdeLibraryService.getDetectedPlatformSystems();
             for (final candidate in detected) {
               if (candidate.folderName.toLowerCase() ==
                   folderName.toLowerCase()) {
