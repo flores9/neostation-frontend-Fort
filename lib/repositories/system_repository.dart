@@ -1,6 +1,7 @@
 import 'dart:io';
 import '../models/system_model.dart';
 import '../data/datasources/sqlite_service.dart';
+import '../services/fort_esde_library_service.dart';
 
 /// Repository for handling system data (app_systems - read-only)
 class SystemRepository {
@@ -15,9 +16,36 @@ class SystemRepository {
     return systems;
   }
 
-  /// Get a system by its folder_name
+  /// Get a system by its folder_name.
+  ///
+  /// Fort ES-DE library platforms are checked first because their folder name
+  /// intentionally does not exist as a canonical `app_systems.folder_name`.
+  /// They still carry the canonical profile id, so emulator configuration and
+  /// launch resolution remain entirely upstream-owned.
   static Future<SystemModel?> getSystemByFolderName(String folderName) async {
     try {
+      final fort = await FortEsdeLibraryService.getPlatform(folderName);
+      if (fort != null) {
+        final profileId = fort['app_system_id']?.toString();
+        if (profileId != null) {
+          final profile = await getSystemById(profileId);
+          if (profile != null) {
+            final detected = await FortEsdeLibraryService
+                .getDetectedPlatformSystems();
+            for (final candidate in detected) {
+              if (candidate.folderName.toLowerCase() ==
+                  folderName.toLowerCase()) {
+                return candidate;
+              }
+            }
+            return profile.copyWith(
+              folderName: fort['esde_system_name']?.toString() ?? folderName,
+              realName: fort['display_name']?.toString() ?? folderName,
+              folders: [folderName],
+            );
+          }
+        }
+      }
       return await SqliteService.getSystemByFolderName(folderName);
     } catch (e) {
       return null;
@@ -48,14 +76,17 @@ class SystemRepository {
         .toList();
   }
 
-  /// Get detected systems with rom count
+  /// Get detected systems with rom count.
+  ///
+  /// When Fort has source provenance for a canonical profile, replace that one
+  /// collapsed tile with its concrete ES-DE platforms. Example: the upstream
+  /// `cpc` tile becomes `amstradcpc` and `gx4000`, both retaining id `cpc` for
+  /// emulator selection.
   static Future<List<SystemModel>> getDetectedSystems() async {
     final allSystems = await getAllSystems();
     final detected = await SqliteService.getUserDetectedSystems();
 
-    // Filter detected systems to only include those present in the JSON configuration
-    // AND platform-specific systems (like Android) only on their respective platforms.
-    return detected.where((d) {
+    final native = detected.where((d) {
       final isPresent = allSystems.any((s) => s.folderName == d.folderName);
       if (!isPresent) return false;
 
@@ -65,6 +96,30 @@ class SystemRepository {
       }
 
       return true;
+    }).toList();
+
+    final fortPlatforms =
+        await FortEsdeLibraryService.getDetectedPlatformSystems();
+    if (fortPlatforms.isEmpty) return native;
+
+    final representedProfiles = fortPlatforms
+        .map((platform) => platform.id)
+        .whereType<String>()
+        .toSet();
+    final combined = <SystemModel>[
+      ...native.where(
+        (system) =>
+            system.isVirtual ||
+            system.folderName == 'all' ||
+            system.folderName == 'favorites' ||
+            !representedProfiles.contains(system.id),
+      ),
+      ...fortPlatforms,
+    ];
+
+    final seen = <String>{};
+    return combined.where((system) {
+      return seen.add(system.folderName.toLowerCase());
     }).toList();
   }
 
@@ -136,11 +191,19 @@ class SystemRepository {
 
   // ── System visibility ─────────────────────────────────────────────────────
 
-  static Future<Set<String>> getHiddenSystems() =>
-      SqliteService.getHiddenSystems();
+  static Future<Set<String>> getHiddenSystems() async {
+    final native = await SqliteService.getHiddenSystems();
+    final fort = await FortEsdeLibraryService.getHiddenPlatforms();
+    return {...native, ...fort};
+  }
 
-  static Future<void> setSystemHidden(String folderName, bool isHidden) =>
-      SqliteService.setSystemHidden(folderName, isHidden);
+  static Future<void> setSystemHidden(String folderName, bool isHidden) async {
+    if (await FortEsdeLibraryService.isLibraryPlatform(folderName)) {
+      await FortEsdeLibraryService.setPlatformHidden(folderName, isHidden);
+      return;
+    }
+    await SqliteService.setSystemHidden(folderName, isHidden);
+  }
 
   // ── ROM counts ────────────────────────────────────────────────────────────
 
