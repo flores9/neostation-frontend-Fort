@@ -20,6 +20,8 @@ import '../services/config_service.dart';
 import '../services/permission_service.dart';
 import '../services/steam_scraper_service.dart';
 import '../services/systems_update_service.dart';
+import '../services/fort_esde_library_service.dart';
+import '../services/fort_esde_scan_plan_service.dart';
 import '../models/secondary_display_state.dart';
 import 'package:flutter/services.dart';
 import '../widgets/tv_directory_picker.dart';
@@ -36,7 +38,7 @@ part 'sqlite_config_provider/secondary_display.dart';
 
 /// Provider responsible for managing application configuration and system detection using SQLite as the backend.
 ///
-/// Coordinates filesystem scanning for ROMs, system metadata synchronization,
+/// Coordinates filesystem ROM scanning, system metadata synchronization,
 /// user preferences persistence, and secondary display state management.
 /// Replaces the legacy JSON-based configuration provider.
 class SqliteConfigProvider extends ChangeNotifier with WidgetsBindingObserver {
