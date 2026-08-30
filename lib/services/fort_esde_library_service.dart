@@ -13,19 +13,16 @@ import '../models/system_model.dart';
 class FortEsdeLibraryService {
   FortEsdeLibraryService._();
 
-  static bool _schemaReady = false;
-
   static const String tableName = 'fort_esde_library_platforms';
   static const String romSourceColumn = 'fort_esde_system_name';
 
-  /// Creates the Fort overlay schema idempotently.
+  /// Creates/validates the Fort overlay schema against the currently open DB.
   ///
-  /// This intentionally does not mutate NeoStation's canonical system tables.
-  /// The global DB migration number can adopt the same schema once the R1
-  /// behaviour is device-validated; until then this guard makes development
-  /// builds forward-compatible without risking an upstream table rewrite.
+  /// Do not cache this check: the setup wizard can move user-data and reopen a
+  /// different SQLite database in the same process. All statements below are
+  /// idempotent, so re-validating is cheap and guarantees the active DB is the
+  /// one being prepared.
   static Future<void> ensureSchema() async {
-    if (_schemaReady) return;
     final db = await SqliteService.getDatabase();
 
     await db.execute('''
@@ -60,11 +57,8 @@ class FortEsdeLibraryService {
       'CREATE INDEX IF NOT EXISTS idx_user_roms_fort_esde_system '
       'ON user_roms($romSourceColumn)',
     );
-    _schemaReady = true;
   }
 
-  /// Persists one concrete ES-DE library platform while preserving its hidden
-  /// state across re-imports.
   static Future<void> upsertPlatform({
     required String esdeSystemName,
     required String appSystemId,
@@ -122,7 +116,6 @@ class FortEsdeLibraryService {
     );
   }
 
-  /// Marks a scanned ROM as belonging to one ES-DE source platform.
   static Future<void> tagRom({
     required String romPath,
     required String esdeSystemName,
@@ -137,12 +130,6 @@ class FortEsdeLibraryService {
     );
   }
 
-  /// Reconstructs missing provenance from the exact ROM roots stored for ES-DE
-  /// platforms. Existing provenance is never overwritten.
-  ///
-  /// This makes ordinary NeoStation rescans self-healing: rows inserted by the
-  /// upstream scanner keep their canonical `app_system_id`, then this overlay
-  /// assigns the concrete ES-DE platform from the path prefix.
   static Future<int> reconcileRomProvenance() async {
     await ensureSchema();
     final db = await SqliteService.getDatabase();
@@ -187,8 +174,6 @@ class FortEsdeLibraryService {
     return updated;
   }
 
-  /// Returns the Fort platform row for [esdeSystemName], or null when that
-  /// folder is just an ordinary NeoStation system/alias.
   static Future<Map<String, Object?>?> getPlatform(
     String esdeSystemName,
   ) async {
@@ -206,10 +191,6 @@ class FortEsdeLibraryService {
   static Future<bool> isLibraryPlatform(String folderName) async =>
       await getPlatform(folderName) != null;
 
-  /// Returns the concrete ES-DE platforms that currently own at least one ROM.
-  /// Each model keeps the canonical NeoStation [SystemModel.id] so emulator
-  /// resolution still uses upstream data, while [SystemModel.folderName]
-  /// becomes the ES-DE library identity used by the UI and media resolver.
   static Future<List<SystemModel>> getDetectedPlatformSystems() async {
     await ensureSchema();
     await reconcileRomProvenance();
@@ -248,9 +229,6 @@ class FortEsdeLibraryService {
           realName: row['display_name']?.toString() ?? source,
           romCount: count,
           detected: true,
-          // The platform is a concrete source, not the canonical profile's
-          // synonym set. Keeping only itself prevents future scan/media code
-          // from silently collapsing sibling ES-DE platforms again.
           folders: [source],
         ),
       );
@@ -258,16 +236,11 @@ class FortEsdeLibraryService {
     return result;
   }
 
-  /// Canonical profile IDs represented by concrete Fort library platforms.
-  /// Used to hide the old collapsed tile (`cpc`, `amiga`, ...) when its ROMs
-  /// have been split into ES-DE source tiles.
   static Future<Set<String>> getRepresentedProfileIds() async {
     final systems = await getDetectedPlatformSystems();
     return systems.map((system) => system.id).whereType<String>().toSet();
   }
 
-  /// Loads the games belonging to one concrete ES-DE platform while retaining
-  /// the canonical profile ID on each [DatabaseGameModel].
   static Future<List<DatabaseGameModel>> getGamesForPlatform(
     String esdeSystemName,
   ) async {
@@ -305,8 +278,6 @@ class FortEsdeLibraryService {
         .toList(growable: false);
   }
 
-  /// Resolves an otherwise ambiguous `system + filename` operation to the ROM
-  /// path owned by the concrete ES-DE platform.
   static Future<String?> findRomPath(
     String esdeSystemName,
     String filename,
@@ -367,7 +338,6 @@ class FortEsdeLibraryService {
     );
   }
 
-  /// Clears only Fort's ES-DE linkage. ROM rows and upstream metadata remain.
   static Future<void> reset() async {
     await ensureSchema();
     final db = await SqliteService.getDatabase();
