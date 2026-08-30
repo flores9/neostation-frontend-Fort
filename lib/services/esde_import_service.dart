@@ -8,6 +8,7 @@ import 'package:xml/xml.dart';
 import '../data/datasources/sqlite_service.dart';
 import '../repositories/scraper_repository.dart';
 import 'esde_config_resolver.dart';
+import 'fort_esde_library_service.dart';
 import 'fort_system_path_service.dart';
 import 'logger_service.dart';
 
@@ -76,6 +77,8 @@ class EsdeImportService {
     _mediaIndexCache.clear();
 
     final resolved = await EsdeConfigResolver.load(esdeRoot);
+    await FortEsdeLibraryService.ensureSchema();
+    await FortEsdeLibraryService.reconcileRomProvenance();
     final sources = await _discoverGamelists(resolved);
     if (sources.isEmpty) {
       _log.w(
@@ -92,6 +95,7 @@ class EsdeImportService {
     for (var i = 0; i < sources.length; i++) {
       final source = sources[i];
       final esdeDirName = source.esdeSystemName;
+      final sourceKey = esdeDirName.toLowerCase();
       onProgress?.call(i / sources.length, esdeDirName);
 
       final system = await ScraperRepository.resolveSystemByFolderName(
@@ -106,14 +110,31 @@ class EsdeImportService {
       }
 
       final appSystemId = system['app_system_id']!;
-      if (!source.manual && systemsWithManualGamelist.contains(appSystemId)) {
+      // A manual gamelist is scoped to one concrete ES-DE platform. A manual
+      // gx4000 gamelist must never suppress the automatic amstradcpc gamelist
+      // merely because both inherit NeoStation's `cpc` emulator profile.
+      if (!source.manual && systemsWithManualGamelist.contains(sourceKey)) {
         _log.i(
           'ES-DE import: automatic gamelist for "$esdeDirName" skipped '
-          'because a Fort manual gamelist already won for $appSystemId',
+          'because its Fort manual gamelist already won',
         );
         continue;
       }
-      if (source.manual) systemsWithManualGamelist.add(appSystemId);
+      if (source.manual) systemsWithManualGamelist.add(sourceKey);
+
+      final definition = resolved.systems[sourceKey];
+      final sourcePaths = resolved.forSystem(esdeDirName);
+      await FortEsdeLibraryService.upsertPlatform(
+        esdeSystemName: esdeDirName,
+        appSystemId: appSystemId,
+        displayName: definition?.fullName ?? esdeDirName,
+        romDirectory: sourcePaths.romDirectory,
+        mediaDirectory: source.mediaDirectory,
+        gamelistFile: source.file.path,
+        theme: definition?.theme,
+        platformTags: definition?.platformTags ?? const [],
+      );
+      await FortEsdeLibraryService.reconcileRomProvenance();
 
       final matchedBefore = result.systemsMatched;
       result = await _importSystem(
@@ -135,7 +156,7 @@ class EsdeImportService {
           appSystemId,
           mediaDirectory: source.mediaDirectory,
         );
-        importedDirs.add(esdeDirName.toLowerCase());
+        importedDirs.add(sourceKey);
       }
     }
 
@@ -241,6 +262,7 @@ class EsdeImportService {
     await db.update('user_system_settings', {
       'esde_media_dir': null,
     }, where: 'esde_media_dir IS NOT NULL');
+    await FortEsdeLibraryService.reset();
     _log.i('ES-DE reset: cleared $deleted metadata rows and media dirs');
     return deleted;
   }
@@ -264,6 +286,18 @@ class EsdeImportService {
 
       final effectiveMedia =
           overrides[esdeDirName.toLowerCase()]?.mediaDirectory ?? dir.path;
+      final definition = resolved.systems[esdeDirName.toLowerCase()];
+      final sourcePaths = resolved.forSystem(esdeDirName);
+      await FortEsdeLibraryService.upsertPlatform(
+        esdeSystemName: esdeDirName,
+        appSystemId: system['app_system_id']!,
+        displayName: definition?.fullName ?? esdeDirName,
+        romDirectory: sourcePaths.romDirectory,
+        mediaDirectory: effectiveMedia,
+        gamelistFile: sourcePaths.firstExistingGamelist,
+        theme: definition?.theme,
+        platformTags: definition?.platformTags ?? const [],
+      );
       await _recordEsdeMediaDir(
         esdeDirName,
         system['app_system_id']!,
@@ -301,9 +335,17 @@ class EsdeImportService {
     final romsByName = <String, Map<String, Object?>>{};
     for (final row in await db.query(
       'user_roms',
-      columns: ['filename', 'is_favorite', 'last_played', 'play_time'],
-      where: 'app_system_id = ?',
-      whereArgs: [appSystemId],
+      columns: [
+        'filename',
+        'rom_path',
+        'is_favorite',
+        'last_played',
+        'play_time',
+      ],
+      where:
+          'app_system_id = ? AND '
+          '${FortEsdeLibraryService.romSourceColumn} = ? COLLATE NOCASE',
+      whereArgs: [appSystemId, esdeDirName],
     )) {
       final name = row['filename']?.toString();
       if (name == null || name.isEmpty) continue;
@@ -342,43 +384,67 @@ class EsdeImportService {
           (rom['filename'] as String?)?.trim().isNotEmpty == true
           ? rom['filename'] as String
           : filename;
+      final romPath = rom['rom_path']?.toString();
 
-      final esdeMeta = <String, dynamic>{
-        'real_name': _text(game, 'name'),
-        descColumn: _text(game, 'desc'),
-        'developer': _text(game, 'developer'),
-        'publisher': _text(game, 'publisher'),
-        'genre': _text(game, 'genre'),
-        'players': _text(game, 'players'),
-        'rating': _parseRating(_text(game, 'rating')),
-        'release_date': _parseEsdeDateTime(
-          _text(game, 'releasedate'),
-        )?.toIso8601String(),
-      };
-      final existingMeta = metaByName[canonicalFilename.toLowerCase()];
-      final metaWrite = ScraperRepository.buildEsdeMetadataWrite(
-        appSystemId: appSystemId,
-        filename: canonicalFilename,
-        row: existingMeta,
-        esde: esdeMeta,
-        mediaSubdir: mediaSubdir,
+      final siblingRows = await db.rawQuery(
+        'SELECT COUNT(DISTINCT ${FortEsdeLibraryService.romSourceColumn}) AS c '
+        'FROM user_roms WHERE app_system_id = ? '
+        'AND filename = ? COLLATE NOCASE '
+        'AND ${FortEsdeLibraryService.romSourceColumn} IS NOT NULL',
+        [appSystemId, canonicalFilename],
       );
-      if (metaWrite != null) {
-        if (existingMeta == null) {
-          batch.insert(
-            'user_screenscraper_metadata',
-            metaWrite,
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        } else {
-          batch.update(
-            'user_screenscraper_metadata',
-            metaWrite,
-            where: 'app_system_id = ? AND filename = ? COLLATE NOCASE',
-            whereArgs: [appSystemId, canonicalFilename],
-          );
+      final siblingCount = siblingRows.isEmpty
+          ? 0
+          : int.tryParse(siblingRows.first['c']?.toString() ?? '0') ?? 0;
+
+      // NeoStation's ScreenScraper metadata table is keyed by canonical profile
+      // + filename. If sibling ES-DE platforms contain the same filename there
+      // is no lossless place to store two different metadata rows yet. Refuse
+      // the ambiguous write instead of making CPC metadata appear on GX4000 (or
+      // vice versa). ROM stats below are path-scoped and remain safe.
+      if (siblingCount <= 1) {
+        final esdeMeta = <String, dynamic>{
+          'real_name': _text(game, 'name'),
+          descColumn: _text(game, 'desc'),
+          'developer': _text(game, 'developer'),
+          'publisher': _text(game, 'publisher'),
+          'genre': _text(game, 'genre'),
+          'players': _text(game, 'players'),
+          'rating': _parseRating(_text(game, 'rating')),
+          'release_date': _parseEsdeDateTime(
+            _text(game, 'releasedate'),
+          )?.toIso8601String(),
+        };
+        final existingMeta = metaByName[canonicalFilename.toLowerCase()];
+        final metaWrite = ScraperRepository.buildEsdeMetadataWrite(
+          appSystemId: appSystemId,
+          filename: canonicalFilename,
+          row: existingMeta,
+          esde: esdeMeta,
+          mediaSubdir: mediaSubdir,
+        );
+        if (metaWrite != null) {
+          if (existingMeta == null) {
+            batch.insert(
+              'user_screenscraper_metadata',
+              metaWrite,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          } else {
+            batch.update(
+              'user_screenscraper_metadata',
+              metaWrite,
+              where: 'app_system_id = ? AND filename = ? COLLATE NOCASE',
+              whereArgs: [appSystemId, canonicalFilename],
+            );
+          }
+          result = result._add(gamesImported: 1);
         }
-        result = result._add(gamesImported: 1);
+      } else {
+        _log.w(
+          'ES-DE metadata skipped for ambiguous sibling filename '
+          '$appSystemId/$canonicalFilename (source=$esdeDirName)',
+        );
       }
 
       final favorite = _flag(game, 'favorite');
@@ -404,12 +470,12 @@ class EsdeImportService {
         update['play_time'] = esdePlayTime;
       }
 
-      if (update.isNotEmpty) {
+      if (update.isNotEmpty && romPath != null && romPath.isNotEmpty) {
         batch.update(
           'user_roms',
           update,
-          where: 'app_system_id = ? AND filename = ? COLLATE NOCASE',
-          whereArgs: [appSystemId, canonicalFilename],
+          where: 'rom_path = ?',
+          whereArgs: [romPath],
         );
         result = result._add(statsUpdated: 1);
       }
