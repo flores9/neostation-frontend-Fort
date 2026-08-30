@@ -97,6 +97,41 @@ void main() {
       },
     );
 
+    test('resolves media across every ES-DE alias owned by one system', () async {
+      await db.execute(
+        "INSERT INTO app_systems (id, real_name, folder_name, screenscraper_id) VALUES ('cpc', 'Amstrad CPC', 'cpc', 65)",
+      );
+      await db.execute(
+        "INSERT INTO app_system_folders (system_id, folder_name) VALUES ('cpc', 'amstradcpc')",
+      );
+      await db.execute(
+        "INSERT INTO app_system_folders (system_id, folder_name) VALUES ('cpc', 'gx4000')",
+      );
+      await db.execute(
+        "INSERT INTO user_system_settings (app_system_id, esde_media_dir) VALUES ('cpc', 'gx4000')",
+      );
+
+      await provider.refreshEsde();
+      final candidates = provider.getEsdeMediaCandidates(
+        'cpc',
+        'box2d',
+        'Batman (UK) (1986) [!].dsk',
+      );
+
+      expect(
+        candidates,
+        contains(
+          '/esde/downloaded_media/amstradcpc/covers/Batman (UK) (1986) [!].png',
+        ),
+      );
+      expect(
+        candidates,
+        contains(
+          '/esde/downloaded_media/gx4000/covers/Batman (UK) (1986) [!].png',
+        ),
+      );
+    });
+
     test('returns nothing for a system with no recorded ES-DE media dir', () {
       expect(
         provider.getEsdeMediaCandidates('nes', 'box2d', 'mario.nes'),
