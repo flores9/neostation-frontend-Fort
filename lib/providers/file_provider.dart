@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:neostation/services/config_service.dart';
 import 'package:neostation/services/esde_config_resolver.dart';
+import 'package:neostation/services/fort_esde_library_service.dart';
 import 'package:neostation/services/fort_system_path_service.dart';
 import 'package:neostation/services/logger_service.dart';
 
@@ -341,6 +342,7 @@ class FileProvider extends ChangeNotifier {
       };
 
       final db = await SqliteService.getDatabase();
+      await FortEsdeLibraryService.ensureSchema();
       final cfg = await db.query(
         'user_config',
         columns: ['esde_folder_path'],
@@ -356,6 +358,26 @@ class FileProvider extends ChangeNotifier {
       final map = <String, List<String>>{};
       if (_esdeRoot != null) {
         final resolved = await EsdeConfigResolver.load(_esdeRoot!);
+
+        // Fort platform rows are authoritative for concrete ES-DE library
+        // identities. A `gx4000` tile therefore receives exactly the GX4000
+        // media root, while `amstradcpc` receives exactly the CPC root even
+        // though both inherit the `cpc` emulator profile.
+        final fortRows = await db.query(
+          FortEsdeLibraryService.tableName,
+          columns: ['esde_system_name', 'media_directory'],
+          where: "media_directory IS NOT NULL AND media_directory != ''",
+        );
+        for (final row in fortRows) {
+          final source = row['esde_system_name']?.toString();
+          final media = row['media_directory']?.toString();
+          if (source == null || media == null || media.trim().isEmpty) continue;
+          _addEsdeMediaPath(map, source, media.trim());
+        }
+
+        // Legacy/canonical compatibility. Old rows retain the previous alias
+        // probing behaviour so existing native NeoStation libraries do not lose
+        // artwork while Fort source-platform provenance is being established.
         final rows = await db.rawQuery('''
           SELECT s.folder_name AS folder_name, ss.esde_media_dir AS esde_media_dir
           FROM user_system_settings ss
@@ -374,13 +396,6 @@ class FileProvider extends ChangeNotifier {
           _addEsdeMediaPath(map, fn, resolved.forSystem(fn).mediaDirectory);
         }
 
-        // One NeoStation system can intentionally own several ES-DE folders.
-        // Amstrad CPC is a real example: NeoStation's `cpc` definition accepts
-        // both `amstradcpc` and `gx4000`, while ES-DE keeps separate media
-        // trees for those names. `user_system_settings.esde_media_dir` can only
-        // retain one alias, so probing that value alone makes whichever alias
-        // was imported last hide the media of the others. Keep the stored alias
-        // first, then add every known alias for the same NeoStation system.
         final aliases = await db.rawQuery('''
           SELECT s.folder_name AS folder_name, f.folder_name AS alias
           FROM app_system_folders f
@@ -403,11 +418,18 @@ class FileProvider extends ChangeNotifier {
 
       final subdirs = <String, String>{};
       if (_esdeRoot != null) {
+        // Tie media subdirectories to ROM provenance when available. For old
+        // rows without provenance, fall back to the canonical folder name.
         final rows = await db.rawQuery('''
-          SELECT s.folder_name AS folder_name, m.filename AS filename,
+          SELECT COALESCE(ur.${FortEsdeLibraryService.romSourceColumn}, s.folder_name)
+                   AS folder_name,
+                 m.filename AS filename,
                  m.esde_media_subdir AS subdir
           FROM user_screenscraper_metadata m
           JOIN app_systems s ON s.id = m.app_system_id
+          LEFT JOIN user_roms ur
+            ON ur.app_system_id = m.app_system_id
+           AND ur.filename = m.filename COLLATE NOCASE
           WHERE m.esde_media_subdir IS NOT NULL AND m.esde_media_subdir != ''
         ''');
         for (final r in rows) {
