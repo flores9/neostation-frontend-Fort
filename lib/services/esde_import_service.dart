@@ -92,6 +92,22 @@ class EsdeImportService {
     final descColumn = _descriptionColumn(preferredLang);
     final systemsWithManualGamelist = <String>{};
 
+    // Legacy/native databases may still contain ROMs without Fort provenance.
+    // That fallback is safe only when this import has one concrete ES-DE
+    // platform for the canonical NeoStation profile. With siblings such as
+    // amstradcpc/gx4000, guessing would cross-contaminate their libraries.
+    final sourceProfiles = <String, Set<String>>{};
+    for (final source in sources) {
+      final system = await ScraperRepository.resolveSystemByFolderName(
+        source.esdeSystemName,
+      );
+      final profileId = system?['app_system_id']?.toString();
+      if (profileId == null || profileId.isEmpty) continue;
+      sourceProfiles
+          .putIfAbsent(profileId, () => <String>{})
+          .add(source.esdeSystemName.toLowerCase());
+    }
+
     for (var i = 0; i < sources.length; i++) {
       final source = sources[i];
       final esdeDirName = source.esdeSystemName;
@@ -144,6 +160,7 @@ class EsdeImportService {
         mediaDirectory: source.mediaDirectory,
         descColumn: descColumn,
         accumulator: result,
+        allowUntaggedFallback: (sourceProfiles[appSystemId]?.length ?? 0) <= 1,
         onGameProgress: onProgress == null
             ? null
             : (fraction) =>
@@ -317,6 +334,7 @@ class EsdeImportService {
     required String mediaDirectory,
     required String descColumn,
     required EsdeImportResult accumulator,
+    required bool allowUntaggedFallback,
     void Function(double fraction)? onGameProgress,
   }) async {
     var result = accumulator;
@@ -332,6 +350,11 @@ class EsdeImportService {
     result = result._add(systemsMatched: 1);
 
     final db = await SqliteService.getDatabase();
+    final sourceColumn = FortEsdeLibraryService.romSourceColumn;
+    final romSourcePredicate = allowUntaggedFallback
+        ? '($sourceColumn = ? COLLATE NOCASE OR '
+              '$sourceColumn IS NULL OR length($sourceColumn) = 0)'
+        : '$sourceColumn = ? COLLATE NOCASE';
     final romsByName = <String, Map<String, Object?>>{};
     for (final row in await db.query(
       'user_roms',
@@ -342,9 +365,7 @@ class EsdeImportService {
         'last_played',
         'play_time',
       ],
-      where:
-          'app_system_id = ? AND '
-          '${FortEsdeLibraryService.romSourceColumn} = ? COLLATE NOCASE',
+      where: 'app_system_id = ? AND $romSourcePredicate',
       whereArgs: [appSystemId, esdeDirName],
     )) {
       final name = row['filename']?.toString();

@@ -179,7 +179,9 @@ class DatabaseGameModel {
   /// Creates a [DatabaseGameModel] from a JSON-compatible map (database row).
   factory DatabaseGameModel.fromJson(Map<String, dynamic> json) {
     return DatabaseGameModel(
-      appSystemId: (json['app_system_id'] ?? json['appSystemId'])?.toString(),
+      appSystemId:
+          (json['app_system_id'] ?? json['appSystemId'] ?? json['system_id'])
+              ?.toString(),
       filename: (json['filename'] ?? '').toString(),
       romPath: (json['rom_path'] ?? json['romPath'] ?? '').toString(),
       isFavorite:
