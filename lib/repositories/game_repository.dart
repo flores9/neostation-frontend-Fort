@@ -246,6 +246,7 @@ class GameRepository {
 
   /// Returns the system folder_name for a game by exact romname, or null.
   static Future<String?> getSystemFolderForGame(String romname) async {
+    await FortEsdeLibraryService.ensureSchema();
     final db = await SqliteService.getDatabase();
     final result = await db.rawQuery(
       '''
@@ -298,6 +299,7 @@ class GameRepository {
   static Future<Map<String, dynamic>?> findRomByFilenamePrefix(
     String prefix,
   ) async {
+    await FortEsdeLibraryService.ensureSchema();
     final db = await SqliteService.getDatabase();
     final result = await db.rawQuery(
       '''
