@@ -1319,7 +1319,6 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
         .config
         .esdeFolderPath;
     if ((selected == null || selected.isEmpty) &&
-        configured != null &&
         configured.trim().isNotEmpty) {
       selected = configured.trim();
     }
@@ -1674,8 +1673,9 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
       }
       return AppLocale.next.getString(context);
     }
-    if (_currentStep == _stepFolder)
+    if (_currentStep == _stepFolder) {
       return AppLocale.selectFolder.getString(context);
+    }
     if (_currentStep == _stepEsde) {
       return _esdeResult != null
           ? AppLocale.next.getString(context)
@@ -1850,8 +1850,7 @@ class _SetupWizardState extends State<SetupWizard> with WidgetsBindingObserver {
     );
     final savedFolder = configProvider.config.romFolder;
     final savedEsde = configProvider.config.esdeFolderPath;
-    if ((savedFolder == null || savedFolder.isEmpty) &&
-        (savedEsde == null || savedEsde.isEmpty)) {
+    if ((savedFolder == null || savedFolder.isEmpty) && savedEsde.isEmpty) {
       _log.w(
         'Warning: neither a ROM folder nor an ES-DE root was saved in config!',
       );
