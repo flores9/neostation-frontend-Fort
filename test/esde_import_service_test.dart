@@ -317,6 +317,57 @@ void main() {
     });
 
     test(
+      'import does not guess untagged ROMs across sibling ES-DE platforms',
+      () async {
+        await db.execute(
+          "INSERT INTO app_systems (id, real_name, folder_name, screenscraper_id) VALUES ('cpc', 'Amstrad CPC', 'cpc', 65)",
+        );
+        await db.execute(
+          "INSERT INTO app_system_folders (system_id, folder_name) VALUES ('cpc', 'amstradcpc')",
+        );
+        await db.execute(
+          "INSERT INTO app_system_folders (system_id, folder_name) VALUES ('cpc', 'gx4000')",
+        );
+        await db.execute(
+          "INSERT INTO user_roms (filename, rom_path, app_system_id) VALUES ('shared.zip', '/outside/shared.zip', 'cpc')",
+        );
+
+        final tempRoot = Directory.systemTemp.createTempSync('esde_test_');
+        addTearDown(() => tempRoot.deleteSync(recursive: true));
+        for (final systemName in const ['amstradcpc', 'gx4000']) {
+          final systemDir = Directory(
+            '${tempRoot.path}/gamelists/$systemName',
+          )..createSync(recursive: true);
+          File('${systemDir.path}/gamelist.xml').writeAsStringSync('''
+            <gameList>
+              <game>
+                <path>./shared.zip</path>
+                <name>$systemName shared game</name>
+                <favorite>true</favorite>
+              </game>
+            </gameList>
+          ''');
+        }
+
+        final result = await EsdeImportService.import(tempRoot.path);
+        expect(result.systemsMatched, 2);
+        expect(result.gamesImported, 0);
+        expect(result.gamesUnmatched, 2);
+
+        final metadata = await db.rawQuery(
+          "SELECT filename FROM user_screenscraper_metadata WHERE app_system_id = 'cpc'",
+        );
+        expect(metadata, isEmpty);
+
+        final rom = await db.rawQuery(
+          "SELECT is_favorite, fort_esde_system_name FROM user_roms WHERE app_system_id = 'cpc'",
+        );
+        expect(rom.single['is_favorite'], 0);
+        expect(rom.single['fort_esde_system_name'], isNull);
+      },
+    );
+
+    test(
       'import links art for a system that has downloaded_media but no gamelist',
       () async {
         final tempRoot = Directory.systemTemp.createTempSync('esde_test_');
