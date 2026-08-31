@@ -126,17 +126,16 @@ class FortEsdePlatformReconciler {
         esdeSystemName: staleName,
       );
 
-      // The canonical NeoStation name was the common phantom identity in the
-      // previous model. If there is exactly one real ES-DE system for this
-      // profile, carrying that provenance across is unambiguous and preserves
-      // favourites/playtime because the user_roms row itself is untouched.
-      if (remaining > 0 &&
-          canonicalKey == staleKey &&
-          activeNames.length == 1) {
-        final targetName = activeNames.values.single;
+      // A canonical NeoStation folder that ES-DE no longer exposes as an active
+      // source is a known artifact of the previous alias-driven Fort model. If
+      // path evidence could not migrate its ROMs, clear only the Fort provenance
+      // instead of guessing which ES-DE sibling owns them. The ROM rows,
+      // favourites, playtime and metadata remain intact and a later scan may
+      // attach them again if a concrete source proves ownership.
+      if (remaining > 0 && canonicalKey == staleKey) {
         await db.update(
           'user_roms',
-          {FortEsdeLibraryService.romSourceColumn: targetName},
+          {FortEsdeLibraryService.romSourceColumn: null},
           where:
               'app_system_id = ? AND '
               '${FortEsdeLibraryService.romSourceColumn} = ? COLLATE NOCASE',
