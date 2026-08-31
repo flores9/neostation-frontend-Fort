@@ -62,6 +62,17 @@ class SystemRepository {
     }
   }
 
+  /// Returns the canonical NeoStation emulation profile behind a Fort
+  /// ES-DE library platform. Native systems are returned unchanged.
+  static Future<SystemModel> getCanonicalProfile(SystemModel system) async {
+    final id = system.id;
+    if (id == null ||
+        !await FortEsdeLibraryService.isLibraryPlatform(system.folderName)) {
+      return system;
+    }
+    return await getSystemById(id) ?? system;
+  }
+
   /// Search systems by name (real_name or folder_name)
   static Future<List<SystemModel>> searchSystems(String query) async {
     final systems = await getAllSystems();

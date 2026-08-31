@@ -321,9 +321,14 @@ class SqliteConfigProvider extends ChangeNotifier with WidgetsBindingObserver {
       // (happens when upgrading from buggy 0.1.7), ensure they are persisted.
       if (_detectedSystems.isNotEmpty) {
         for (final system in _detectedSystems) {
+          final persistentSystem = await SystemRepository.getCanonicalProfile(
+            system,
+          );
+          final systemId = persistentSystem.id;
+          if (systemId == null) continue;
           await SystemRepository.addDetectedSystem(
-            system.id.toString(),
-            system.folderName,
+            systemId,
+            persistentSystem.folderName,
           );
         }
       }

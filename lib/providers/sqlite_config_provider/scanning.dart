@@ -591,8 +591,9 @@ extension SqliteConfigScanning on SqliteConfigProvider {
       // roots in ONE SqliteDatabaseService pass. The upstream scanner performs
       // orphan cleanup once per call; doing one call per sibling would let the
       // second source incorrectly delete the first source's rows.
+      final scanSystem = await SystemRepository.getCanonicalProfile(system);
       final fortSources = await FortEsdeScanPlanService.resolve(
-        system,
+        scanSystem,
         esdeRoot: _config.esdeFolderPath,
       );
 
@@ -664,7 +665,7 @@ extension SqliteConfigScanning on SqliteConfigProvider {
         }
 
         final summary = await SqliteDatabaseService.scanSystemRoms(
-          system,
+          scanSystem,
           scanRoots,
           ignoreHiddenFiles: _config.ignoreHiddenFiles,
           rootFoldersMap: exactMaps,
@@ -676,7 +677,7 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           'added=${summary.added} removed=${summary.removed} '
           'total=${summary.total} provenanceTagged=$tagged',
         );
-        await refreshSystem(system, rootFoldersMap: exactMaps);
+        await refreshSystem(scanSystem, rootFoldersMap: exactMaps);
         if (system.folderName == 'steam') {
           SteamScraperService.scrapeSteamGames();
         }
@@ -724,7 +725,7 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           for (final alias in aliases) alias.toLowerCase(): direct,
         };
         final summary = await SqliteDatabaseService.scanSystemRoms(
-          system,
+          scanSystem,
           [direct],
           ignoreHiddenFiles: _config.ignoreHiddenFiles,
           rootFoldersMap: {direct: exactMap},
@@ -733,7 +734,7 @@ extension SqliteConfigScanning on SqliteConfigProvider {
           'Fort ScanResult[${system.realName}] source=$direct: '
           'added=${summary.added} removed=${summary.removed} total=${summary.total}',
         );
-        await refreshSystem(system, rootFoldersMap: {direct: exactMap});
+        await refreshSystem(scanSystem, rootFoldersMap: {direct: exactMap});
         if (system.folderName == 'steam') {
           SteamScraperService.scrapeSteamGames();
         }
@@ -760,7 +761,7 @@ extension SqliteConfigScanning on SqliteConfigProvider {
         'ScanResult[${system.realName}]: added=${summary.added} '
         'removed=${summary.removed} total=${summary.total}',
       );
-      await refreshSystem(system, rootFoldersMap: rootFoldersMap);
+      await refreshSystem(scanSystem, rootFoldersMap: rootFoldersMap);
       if (system.folderName == 'steam') {
         SteamScraperService.scrapeSteamGames();
       }
