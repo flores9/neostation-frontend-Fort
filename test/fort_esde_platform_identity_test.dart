@@ -129,27 +129,27 @@ void main() {
       },
     );
 
-    test('ambiguous stale provenance is preserved instead of guessed', () async {
+    test('shared active root remains ambiguous instead of picking an alias', () async {
       await FortEsdeLibraryService.upsertPlatform(
         esdeSystemName: 'legacy-cpc',
         appSystemId: 'cpc',
         displayName: 'Legacy CPC',
-        romDirectory: '/unknown',
+        romDirectory: '/shared',
         mediaDirectory: '/unknown-media',
       );
       await db.execute('''
         INSERT INTO user_roms (
           app_system_id, filename, rom_path, fort_esde_system_name
         ) VALUES (
-          'cpc', 'Unknown.dsk', '/elsewhere/Unknown.dsk', 'legacy-cpc'
+          'cpc', 'Unknown.dsk', '/shared/Unknown.dsk', 'legacy-cpc'
         )
       ''');
 
       final removed = await FortEsdePlatformReconciler.reconcileProfile(
         appSystemId: 'cpc',
         activeSources: const {
-          'amstradcpc': '/roms/amstradcpc',
-          'gx4000': '/roms/gx4000',
+          'amstradcpc': '/shared',
+          'gx4000': '/shared',
         },
       );
 

@@ -29,6 +29,15 @@ class FortEsdePlatformReconciler {
     }
     if (activeNames.isEmpty) return 0;
 
+    // A ROM path is usable as migration evidence only if exactly one active
+    // ES-DE identity owns that root. Two explicit ES-DE systems may legally
+    // share one physical directory, so a shared root must never pick a winner.
+    final rootOwnerCounts = <String, int>{};
+    for (final root in activeRoots.values) {
+      final normalized = _normalizePath(root);
+      rootOwnerCounts[normalized] = (rootOwnerCounts[normalized] ?? 0) + 1;
+    }
+
     final canonicalRows = await db.query(
       'app_systems',
       columns: ['folder_name'],
@@ -60,21 +69,19 @@ class FortEsdePlatformReconciler {
           : _trimTrailingSeparators(staleRootRaw);
 
       String? sameRootTarget;
-      var sameRootAmbiguous = false;
       if (staleRoot != null) {
-        for (final entry in activeRoots.entries) {
-          if (_normalizePath(entry.value) != _normalizePath(staleRoot)) {
-            continue;
+        final normalizedStaleRoot = _normalizePath(staleRoot);
+        if (rootOwnerCounts[normalizedStaleRoot] == 1) {
+          for (final entry in activeRoots.entries) {
+            if (_normalizePath(entry.value) == normalizedStaleRoot) {
+              sameRootTarget = activeNames[entry.key];
+              break;
+            }
           }
-          if (sameRootTarget != null) {
-            sameRootAmbiguous = true;
-            break;
-          }
-          sameRootTarget = activeNames[entry.key];
         }
       }
 
-      if (sameRootTarget != null && !sameRootAmbiguous) {
+      if (sameRootTarget != null) {
         await db.update(
           'user_roms',
           {FortEsdeLibraryService.romSourceColumn: sameRootTarget},
@@ -85,8 +92,9 @@ class FortEsdePlatformReconciler {
         );
       } else {
         for (final entry in activeRoots.entries) {
-          final targetName = activeNames[entry.key]!;
           final root = entry.value;
+          if (rootOwnerCounts[_normalizePath(root)] != 1) continue;
+          final targetName = activeNames[entry.key]!;
           await db.rawUpdate(
             '''
             UPDATE user_roms
