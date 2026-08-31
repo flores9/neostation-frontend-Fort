@@ -129,40 +129,84 @@ void main() {
       },
     );
 
-    test('shared active root remains ambiguous instead of picking an alias', () async {
-      await FortEsdeLibraryService.upsertPlatform(
-        esdeSystemName: 'legacy-cpc',
-        appSystemId: 'cpc',
-        displayName: 'Legacy CPC',
-        romDirectory: '/shared',
-        mediaDirectory: '/unknown-media',
-      );
-      await db.execute('''
-        INSERT INTO user_roms (
-          app_system_id, filename, rom_path, fort_esde_system_name
-        ) VALUES (
-          'cpc', 'Unknown.dsk', '/shared/Unknown.dsk', 'legacy-cpc'
-        )
-      ''');
+    test(
+      'obsolete canonical alias clears provenance instead of guessing sibling',
+      () async {
+        await FortEsdeLibraryService.upsertPlatform(
+          esdeSystemName: 'cpc',
+          appSystemId: 'cpc',
+          displayName: 'Amstrad CPC',
+          romDirectory: '/old/cpc',
+          mediaDirectory: '/old/media/cpc',
+        );
+        await db.execute('''
+          INSERT INTO user_roms (
+            app_system_id, filename, rom_path, is_favorite, play_time,
+            fort_esde_system_name
+          ) VALUES (
+            'cpc', 'Old.dsk', '/old/cpc/Old.dsk', 1, 999, 'cpc'
+          )
+        ''');
 
-      final removed = await FortEsdePlatformReconciler.reconcileProfile(
-        appSystemId: 'cpc',
-        activeSources: const {
-          'amstradcpc': '/shared',
-          'gx4000': '/shared',
-        },
-      );
+        final removed = await FortEsdePlatformReconciler.reconcileProfile(
+          appSystemId: 'cpc',
+          activeSources: const {
+            'amstradcpc': '/roms/amstradcpc',
+            'gx4000': '/roms/gx4000',
+          },
+        );
 
-      expect(removed, 0);
-      final rom = (await db.query('user_roms')).single;
-      expect(rom['fort_esde_system_name'], 'legacy-cpc');
-      final stale = await db.query(
-        FortEsdeLibraryService.tableName,
-        where: 'esde_system_name = ?',
-        whereArgs: ['legacy-cpc'],
-      );
-      expect(stale, hasLength(1));
-    });
+        expect(removed, 1);
+        final rom = (await db.query('user_roms')).single;
+        expect(rom['fort_esde_system_name'], isNull);
+        expect(rom['is_favorite'], 1);
+        expect(rom['play_time'], 999);
+        final stale = await db.query(
+          FortEsdeLibraryService.tableName,
+          where: 'esde_system_name = ?',
+          whereArgs: ['cpc'],
+        );
+        expect(stale, isEmpty);
+      },
+    );
+
+    test(
+      'shared active root remains ambiguous instead of picking an alias',
+      () async {
+        await FortEsdeLibraryService.upsertPlatform(
+          esdeSystemName: 'legacy-cpc',
+          appSystemId: 'cpc',
+          displayName: 'Legacy CPC',
+          romDirectory: '/shared',
+          mediaDirectory: '/unknown-media',
+        );
+        await db.execute('''
+          INSERT INTO user_roms (
+            app_system_id, filename, rom_path, fort_esde_system_name
+          ) VALUES (
+            'cpc', 'Unknown.dsk', '/shared/Unknown.dsk', 'legacy-cpc'
+          )
+        ''');
+
+        final removed = await FortEsdePlatformReconciler.reconcileProfile(
+          appSystemId: 'cpc',
+          activeSources: const {
+            'amstradcpc': '/shared',
+            'gx4000': '/shared',
+          },
+        );
+
+        expect(removed, 0);
+        final rom = (await db.query('user_roms')).single;
+        expect(rom['fort_esde_system_name'], 'legacy-cpc');
+        final stale = await db.query(
+          FortEsdeLibraryService.tableName,
+          where: 'esde_system_name = ?',
+          whereArgs: ['legacy-cpc'],
+        );
+        expect(stale, hasLength(1));
+      },
+    );
   });
 }
 
