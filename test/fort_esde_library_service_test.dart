@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:neostation/repositories/system_repository.dart';
 import 'package:neostation/services/fort_esde_library_service.dart';
 
 import 'database_test_helper.dart';
@@ -99,6 +100,33 @@ void main() {
         expect(gx.realName, 'Amstrad GX4000');
         expect(cpc.romCount, 1);
         expect(gx.romCount, 1);
+      },
+    );
+
+    test(
+      'canonicalizes a visible ES-DE platform before profile-wide rescan',
+      () async {
+        await db.execute(
+          "INSERT INTO user_roms (app_system_id, filename, rom_path) "
+          "VALUES ('cpc', 'GX Game.zip', '/roms/gx4000/GX Game.zip')",
+        );
+
+        final systems =
+            await FortEsdeLibraryService.getDetectedPlatformSystems();
+        final gx = systems.singleWhere(
+          (system) => system.folderName == 'gx4000',
+        );
+
+        final canonical = await SystemRepository.getCanonicalProfile(gx);
+        expect(canonical.id, 'cpc');
+        expect(canonical.folderName, 'cpc');
+        expect(canonical.folders, contains('amstradcpc'));
+        expect(canonical.folders, contains('gx4000'));
+
+        final native = await SystemRepository.getSystemById('cpc');
+        expect(native, isNotNull);
+        final unchanged = await SystemRepository.getCanonicalProfile(native!);
+        expect(unchanged.folderName, 'cpc');
       },
     );
 
