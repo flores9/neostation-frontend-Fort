@@ -93,9 +93,6 @@ class DirectoriesSettingsContentState
   }
 
   void scrollToIndex(int index) {
-    // Use the focused row's own key so scrolling tracks its real height —
-    // section headers and path-chip cards aren't a uniform height, so a
-    // fixed per-row estimate drifts and overshoots as the list scrolls.
     _scroller.ensureVisibleIndex(
       index,
       keys: _itemKeys,
@@ -106,28 +103,24 @@ class DirectoriesSettingsContentState
   void _buildDirectoryItems() {
     _directoryItems.clear();
 
-    // 0: User Data Location
     _directoryItems.add({
       'title': AppLocale.userDataLocation,
       'subtitle': AppLocale.userDataLocationSubtitle,
       'action': 'user_data',
     });
 
-    // 1: Rescan All ROM Folders
     _directoryItems.add({
       'title': AppLocale.rescanAllFolders,
       'subtitle': AppLocale.rescanAllFoldersSubtitle,
       'action': 'rescan',
     });
 
-    // 2: Add ROM Folder
     _directoryItems.add({
       'title': AppLocale.addRomFolder,
       'subtitle': AppLocale.romsFolderSubtitle,
       'action': 'add_rom',
     });
 
-    // 3..n+2: Individual ROM folders (removable)
     for (final path in _currentRomFolders) {
       _directoryItems.add({
         'title': path,
@@ -137,7 +130,6 @@ class DirectoriesSettingsContentState
       });
     }
 
-    // ES-DE import actions (grouped under their own section header in build).
     _esdeSectionStart = _directoryItems.length;
     _directoryItems.add({
       'title': AppLocale.esdeSelectFolder,
@@ -156,13 +148,7 @@ class DirectoriesSettingsContentState
     });
   }
 
-  // Index of the first ES-DE item in [_directoryItems]; used to insert the
-  // "ES-DE Import" section header at the right position.
   int _esdeSectionStart = -1;
-
-  // ES-DE import requires at least one ROM directory to match games against,
-  // so the whole section is disabled until one is configured.
-  bool get _esdeEnabled => _currentRomFolders.isNotEmpty;
 
   static const Set<String> _esdeActions = {
     'esde_select_folder',
@@ -170,13 +156,12 @@ class DirectoriesSettingsContentState
     'esde_reset',
   };
 
-  /// Whether an ES-DE action is currently disabled. Requires a ROM directory
-  /// for the whole section, plus a selected ES-DE folder for the import action.
+  /// Fort treats ES-DE as a first-class library source. Selecting or resetting
+  /// ES-DE must never depend on a separate NeoStation ROM folder existing.
+  /// Only the import action itself needs a configured ES-DE root.
   bool _isEsdeDisabled(String action) {
     if (!_esdeActions.contains(action)) return false;
-    if (!_esdeEnabled) return true;
-    if (action == 'esde_run_import' && _esdePath.trim().isEmpty) return true;
-    return false;
+    return action == 'esde_run_import' && _esdePath.trim().isEmpty;
   }
 
   Future<void> _loadCurrentPaths() async {
@@ -199,7 +184,6 @@ class DirectoriesSettingsContentState
 
   Future<void> _handleItemTap(Map<String, dynamic> item) async {
     final action = item['action'] as String;
-    // Disabled ES-DE actions are inert — no toast, no sound, no work.
     if (_isEsdeDisabled(action)) return;
     final configProvider = Provider.of<SqliteConfigProvider>(
       context,
@@ -230,10 +214,6 @@ class DirectoriesSettingsContentState
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // ES-DE import
-  // ---------------------------------------------------------------------------
-
   String get _esdePath =>
       context.read<SqliteConfigProvider>().config.esdeFolderPath;
 
@@ -251,13 +231,19 @@ class DirectoriesSettingsContentState
             final uri = await PermissionService.requestFolderAccess();
             if (uri != null) {
               final uriStr = uri.toString();
-              final hasFiles = await PermissionService.hasAllFilesAccess();
-              selected =
-                  await UserDataLocationService.resolveAndroidUserDataPath(
-                    uriStr,
-                    hasAllFilesAccess: hasFiles,
-                  ) ??
-                  UserDataLocationService.safUriToRealPath(uriStr);
+              // ES-DE is a READ SOURCE, not a NeoStation user-data
+              // destination. Never use resolveAndroidUserDataPath here: when
+              // All-Files access is absent that method deliberately redirects
+              // to Android/data/<pkg>/user-data, which silently changes the
+              // folder the user selected. Keep the exact selected volume/path.
+              selected = UserDataLocationService.safUriToRealPath(uriStr);
+              if (selected == null) {
+                throw StateError(
+                  'The selected Android folder cannot be mapped to a readable '
+                  'filesystem path. Grant All files access and select the '
+                  'ES-DE folder again.',
+                );
+              }
             }
           } on PlatformException catch (e) {
             if (e.code == 'PICKER_FAILED' && mounted) {
@@ -277,8 +263,27 @@ class DirectoriesSettingsContentState
         selected = selected.substring(0, selected.length - 1);
       }
 
-      await context.read<SqliteConfigProvider>().updateEsdeFolderPath(selected);
-      // Refresh the fallback map so any already-recorded systems resolve.
+      final root = Directory(selected);
+      final looksLikeEsde =
+          root.existsSync() &&
+          (File('$selected/settings/es_settings.xml').existsSync() ||
+              File('$selected/custom_systems/es_systems.xml').existsSync() ||
+              Directory('$selected/gamelists').existsSync());
+      if (!looksLikeEsde) {
+        AppNotification.showNotification(
+          context,
+          AppLocale.esdeImportNotEsdeFolder.getString(context),
+          type: NotificationType.error,
+        );
+        return;
+      }
+
+      final configProvider = context.read<SqliteConfigProvider>();
+      await configProvider.updateEsdeFolderPath(selected);
+      // Selecting ES-DE can be the first/only library source. Scan immediately
+      // so its ROMDirectory/custom systems create ROM provenance before the
+      // metadata import tries to match gamelist entries.
+      await configProvider.scanSystems();
       if (mounted) await context.read<FileProvider>().refreshEsde();
       if (mounted) setState(() {});
     } catch (e) {
@@ -306,9 +311,6 @@ class DirectoriesSettingsContentState
     if (_isImporting) return;
 
     const notificationId = 'esde_import_progress';
-
-    // Resolve ES-DE strings before the async import so the progress callback
-    // (which may run after this screen was left) can use them safely.
     final localeEsdeImporting = AppLocale.esdeImporting.getString(context);
     final localeEsdeImportNotEsdeFolder = AppLocale.esdeImportNotEsdeFolder
         .getString(context);
@@ -360,15 +362,12 @@ class DirectoriesSettingsContentState
           );
         },
       );
-      // Rebuild the fallback map now that esde_media_dir rows exist.
       if (mounted) await context.read<FileProvider>().refreshEsde();
     } catch (e) {
       error = e.toString();
       _log.e('ES-DE import failed: $e');
     }
 
-    // Report the outcome through the global notification so the header
-    // dropdown reflects it even if this screen was left mid-import.
     if (error != null) {
       GlobalNotificationService().update(
         id: notificationId,
@@ -378,7 +377,6 @@ class DirectoriesSettingsContentState
       );
     } else if (result != null) {
       if (!result.gamelistsDirFound) {
-        // No gamelists/ dir — the picked folder isn't an ES-DE installation.
         GlobalNotificationService().update(
           id: notificationId,
           message: localeEsdeImportNotEsdeFolder,
@@ -386,7 +384,6 @@ class DirectoriesSettingsContentState
           progress: null,
         );
       } else if (result.gamesImported == 0 && result.systemsMatched == 0) {
-        // Valid ES-DE folder, but nothing here mapped to a NeoStation system.
         GlobalNotificationService().update(
           id: notificationId,
           message: localeEsdeImportNothingFound,
@@ -407,10 +404,6 @@ class DirectoriesSettingsContentState
     }
 
     if (!mounted) return;
-    // Only surface the result summary for an import that actually ran against a
-    // real ES-DE folder and touched something — not for an exception, a
-    // "not an ES-DE folder" bail-out, or a matched-nothing no-op (those get a
-    // notification instead, so a zeroed summary box would just be noise).
     final showSummary =
         error == null &&
         result != null &&
@@ -436,9 +429,6 @@ class DirectoriesSettingsContentState
 
     try {
       final cleared = await EsdeImportService.reset();
-      // Fully disconnect ES-DE: also clear the selected folder so the section
-      // returns to its initial "Select ES-DE Folder" state. Goes through the
-      // provider (not the DB directly) so the cached config + UI update too.
       if (mounted) {
         await context.read<SqliteConfigProvider>().updateEsdeFolderPath('');
       }
@@ -461,10 +451,6 @@ class DirectoriesSettingsContentState
       }
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // ROM folder picker
-  // ---------------------------------------------------------------------------
 
   Future<void> _selectRomFolder() async {
     final configProvider = Provider.of<SqliteConfigProvider>(
@@ -545,10 +531,6 @@ class DirectoriesSettingsContentState
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // User data location picker + migration
-  // ---------------------------------------------------------------------------
-
   Future<void> _selectUserDataLocation() async {
     try {
       String? selected;
@@ -559,9 +541,6 @@ class DirectoriesSettingsContentState
         if (isTV) {
           selected = await TvDirectoryPicker.show(context);
         } else {
-          // Regular Android: SAF picker → resolve to accessible path.
-          // On Android 15+, SD card volumes require app-specific external
-          // storage dirs; resolveAndroidUserDataPath handles this automatically.
           try {
             final uri = await PermissionService.requestFolderAccess();
             if (uri != null) {
@@ -596,9 +575,6 @@ class DirectoriesSettingsContentState
       final current = _currentUserDataPath;
       if (current == null || selected == current) return;
 
-      // Relocating actually MOVES data (copy + delete of NeoStation's own
-      // files), so confirm the source → destination move explicitly, noting
-      // when the destination already contains files.
       final entryCount = await UserDataLocationService.countDirectoryEntries(
         selected,
       );
@@ -653,9 +629,6 @@ class DirectoriesSettingsContentState
         },
       );
       await UserDataLocationService.setCustomPath(destPath);
-      // Reinforce the SharedPreferences setup flag so that if the new path
-      // (e.g. SD card) is temporarily unavailable on next boot, the wizard
-      // is not shown again.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(PermissionCheckWrapper.setupCompletedKey, true);
     } catch (e) {
@@ -687,10 +660,6 @@ class DirectoriesSettingsContentState
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Public interface for parent (gamepad delegation)
-  // ---------------------------------------------------------------------------
-
   int getItemCount() => _directoryItems.length;
 
   void selectItem(int index) {
@@ -698,10 +667,6 @@ class DirectoriesSettingsContentState
       _handleItemTap(_directoryItems[index]);
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Build
-  // ---------------------------------------------------------------------------
 
   Widget _buildMigrationProgress(ThemeData theme) {
     if (!_isMigrating) return const SizedBox.shrink();
@@ -815,7 +780,6 @@ class DirectoriesSettingsContentState
           ClipRRect(
             borderRadius: BorderRadius.circular(4.r),
             child: LinearProgressIndicator(
-              // null = indeterminate while system count not yet known
               value: provider.totalSystemsToScan > 0
                   ? provider.scanProgress
                   : null,
@@ -876,18 +840,13 @@ class DirectoriesSettingsContentState
             Expanded(
               child: Builder(
                 builder: (context) {
-                  // Precompute visual rows: either a section header or a
-                  // navigable item, so header insertion stays robust as the
-                  // ROM-folder count changes.
                   final visualRows = <Map<String, dynamic>>[];
                   for (var i = 0; i < _directoryItems.length; i++) {
-                    // "ROM Directories" header before add_rom (nav index 2).
                     if (i == 2) {
                       visualRows.add({
                         'header': AppLocale.romDirectories.getString(context),
                       });
                     }
-                    // "ES-DE Import" header before the first ES-DE item.
                     if (i == _esdeSectionStart) {
                       visualRows.add({
                         'header': AppLocale.esdeImport.getString(context),
@@ -1078,13 +1037,11 @@ class DirectoriesSettingsContentState
                                         ),
                                     ],
                                   ),
-                                  // Show current ES-DE folder under its select item
                                   if (item['action'] == 'esde_select_folder' &&
                                       _esdePath.trim().isNotEmpty) ...[
                                     SizedBox(height: 6.r),
                                     _buildPathChip(theme, _esdePath),
                                   ],
-                                  // Show current path under user_data item
                                   if (isUserData &&
                                       _currentUserDataPath != null) ...[
                                     SizedBox(height: 6.r),
