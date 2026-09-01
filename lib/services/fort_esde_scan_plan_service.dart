@@ -156,7 +156,8 @@ class FortEsdeScanPlanService {
     final canonical = candidates[canonicalKey];
     final hasStrongerSibling = candidates.entries.any(
       (entry) =>
-          entry.key != canonicalKey && entry.value.evidence > _romFolderEvidence,
+          entry.key != canonicalKey &&
+          entry.value.evidence > _romFolderEvidence,
     );
     if (canonical != null &&
         canonical.evidence == _romFolderEvidence &&
@@ -187,7 +188,8 @@ class FortEsdeScanPlanService {
         final explicit = resolved.customSystemRomPaths[key];
         if (explicit != null && explicit.isNotEmpty) {
           romDirectory = explicit;
-        } else if (definition != null || candidate.evidence > _romFolderEvidence) {
+        } else if (definition != null ||
+            candidate.evidence > _romFolderEvidence) {
           // Strong ES-DE identity evidence is enough to trust the configured
           // ROMDirectory even when dart:io cannot probe that volume directly.
           romDirectory = auto?.romDirectory;

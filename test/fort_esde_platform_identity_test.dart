@@ -79,10 +79,10 @@ void main() {
         esdeRoot: root,
       );
 
-      expect(
-        sources.map((source) => source.esdeSystemName).toSet(),
-        {'amstradcpc', 'gx4000'},
-      );
+      expect(sources.map((source) => source.esdeSystemName).toSet(), {
+        'amstradcpc',
+        'gx4000',
+      });
       expect(
         sources.map((source) => source.esdeSystemName),
         isNot(contains('cpc')),
@@ -190,10 +190,7 @@ void main() {
 
         final removed = await FortEsdePlatformReconciler.reconcileProfile(
           appSystemId: 'cpc',
-          activeSources: const {
-            'amstradcpc': '/shared',
-            'gx4000': '/shared',
-          },
+          activeSources: const {'amstradcpc': '/shared', 'gx4000': '/shared'},
         );
 
         expect(removed, 0);

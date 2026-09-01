@@ -107,16 +107,7 @@ class FortEsdePlatformReconciler {
                 OR substr(rom_path, 1, length(?) + 1) = ? || '\\'
               )
             ''',
-            [
-              targetName,
-              appSystemId,
-              staleName,
-              root,
-              root,
-              root,
-              root,
-              root,
-            ],
+            [targetName, appSystemId, staleName, root, root, root, root, root],
           );
         }
       }
