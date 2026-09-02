@@ -46,7 +46,7 @@ class EsdeImportResult {
       gamesImported: this.gamesImported + gamesImported,
       gamesUnmatched: this.gamesUnmatched + gamesUnmatched,
       statsUpdated: this.statsUpdated + statsUpdated,
-      gamelistsDirFound: gamelistsDirFound,
+      gamelistDirFound: gamelistsDirFound,
     );
   }
 }
@@ -68,6 +68,20 @@ class _EsdeGamelistSource {
 /// Imports metadata and wires up read-only fallback artwork from ES-DE.
 class EsdeImportService {
   static final _log = LoggerService.instance;
+
+  static const Set<String> _esdeMediaCategories = {
+    '3dboxes',
+    'backcovers',
+    'covers',
+    'fanart',
+    'manuals',
+    'marquees',
+    'miximages',
+    'physicalmedia',
+    'screenshots',
+    'titlescreens',
+    'videos',
+  };
 
   static Future<EsdeImportResult> import(
     String esdeRoot, {
@@ -92,10 +106,6 @@ class EsdeImportService {
     final descColumn = _descriptionColumn(preferredLang);
     final systemsWithManualGamelist = <String>{};
 
-    // Legacy/native databases may still contain ROMs without Fort provenance.
-    // That fallback is safe only when this import has one concrete ES-DE
-    // platform for the canonical NeoStation profile. With siblings such as
-    // amstradcpc/gx4000, guessing would cross-contaminate their libraries.
     final sourceProfiles = <String, Set<String>>{};
     for (final source in sources) {
       final system = await ScraperRepository.resolveSystemByFolderName(
@@ -126,9 +136,6 @@ class EsdeImportService {
       }
 
       final appSystemId = system['app_system_id']!;
-      // A manual gamelist is scoped to one concrete ES-DE platform. A manual
-      // gx4000 gamelist must never suppress the automatic amstradcpc gamelist
-      // merely because both inherit NeoStation's `cpc` emulator profile.
       if (!source.manual && systemsWithManualGamelist.contains(sourceKey)) {
         _log.i(
           'ES-DE import: automatic gamelist for "$esdeDirName" skipped '
@@ -189,8 +196,12 @@ class EsdeImportService {
     return result;
   }
 
-  /// Discovers gamelists with manual per-system overrides first, then ES-DE's
-  /// own central/custom/ROM-local candidates.
+  /// Discovers gamelists only from concrete ES-DE/user evidence.
+  ///
+  /// NeoStation's app_systems/app_system_folders aliases deliberately do not
+  /// participate here: those names describe emulator compatibility, not what
+  /// platforms actually exist in the ES-DE library. ROM-local gamelists remain
+  /// supported by enumerating the configured ES-DE ROMDirectory itself.
   static Future<List<_EsdeGamelistSource>> _discoverGamelists(
     EsdeResolvedConfig resolved,
   ) async {
@@ -204,21 +215,23 @@ class EsdeImportService {
       }
     }
 
+    names.addAll(resolved.systems.keys);
     names.addAll(resolved.customSystemRomPaths.keys);
 
-    try {
-      final db = await SqliteService.getDatabase();
-      final rows = await db.rawQuery('''
-        SELECT folder_name FROM app_systems
-        UNION
-        SELECT folder_name FROM app_system_folders
-      ''');
-      for (final row in rows) {
-        final name = row['folder_name']?.toString().trim();
-        if (name != null && name.isNotEmpty) names.add(name);
+    final romRootPath = resolved.settings.romDirectory;
+    if (romRootPath != null && romRootPath.isNotEmpty) {
+      final romRoot = Directory(romRootPath);
+      if (romRoot.existsSync()) {
+        try {
+          for (final dir in romRoot.listSync().whereType<Directory>()) {
+            if (File(path.join(dir.path, 'gamelist.xml')).existsSync()) {
+              names.add(path.basename(dir.path));
+            }
+          }
+        } catch (e) {
+          _log.w('ES-DE import: could not enumerate ROM-local gamelists: $e');
+        }
       }
-    } catch (e) {
-      _log.w('ES-DE import: could not enumerate system aliases: $e');
     }
 
     final deduped = <String, _EsdeGamelistSource>{};
@@ -293,6 +306,8 @@ class EsdeImportService {
 
     final overrides = await FortSystemPathService.loadAll();
     for (final dir in mediaRoot.listSync().whereType<Directory>()) {
+      if (!_looksLikeEsdeMediaSystemDirectory(dir)) continue;
+
       final esdeDirName = path.basename(dir.path);
       if (importedDirs.contains(esdeDirName.toLowerCase())) continue;
 
@@ -325,6 +340,19 @@ class EsdeImportService {
         '(no gamelist.xml) to ${system['app_system_id']}',
       );
     }
+  }
+
+  static bool _looksLikeEsdeMediaSystemDirectory(Directory directory) {
+    try {
+      for (final child in directory.listSync().whereType<Directory>()) {
+        if (_esdeMediaCategories.contains(path.basename(child.path).toLowerCase())) {
+          return true;
+        }
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
   }
 
   static Future<EsdeImportResult> _importSystem({
@@ -418,11 +446,6 @@ class EsdeImportService {
           ? 0
           : int.tryParse(siblingRows.first['c']?.toString() ?? '0') ?? 0;
 
-      // NeoStation's ScreenScraper metadata table is keyed by canonical profile
-      // + filename. If sibling ES-DE platforms contain the same filename there
-      // is no lossless place to store two different metadata rows yet. Refuse
-      // the ambiguous write instead of making CPC metadata appear on GX4000 (or
-      // vice versa). ROM stats below are path-scoped and remain safe.
       if (siblingCount <= 1) {
         final esdeMeta = <String, dynamic>{
           'real_name': _text(game, 'name'),
