@@ -46,7 +46,7 @@ class EsdeImportResult {
       gamesImported: this.gamesImported + gamesImported,
       gamesUnmatched: this.gamesUnmatched + gamesUnmatched,
       statsUpdated: this.statsUpdated + statsUpdated,
-      gamelistDirFound: gamelistsDirFound,
+      gamelistsDirFound: gamelistsDirFound,
     );
   }
 }
@@ -196,12 +196,6 @@ class EsdeImportService {
     return result;
   }
 
-  /// Discovers gamelists only from concrete ES-DE/user evidence.
-  ///
-  /// NeoStation's app_systems/app_system_folders aliases deliberately do not
-  /// participate here: those names describe emulator compatibility, not what
-  /// platforms actually exist in the ES-DE library. ROM-local gamelists remain
-  /// supported by enumerating the configured ES-DE ROMDirectory itself.
   static Future<List<_EsdeGamelistSource>> _discoverGamelists(
     EsdeResolvedConfig resolved,
   ) async {
@@ -345,7 +339,9 @@ class EsdeImportService {
   static bool _looksLikeEsdeMediaSystemDirectory(Directory directory) {
     try {
       for (final child in directory.listSync().whereType<Directory>()) {
-        if (_esdeMediaCategories.contains(path.basename(child.path).toLowerCase())) {
+        if (_esdeMediaCategories.contains(
+          path.basename(child.path).toLowerCase(),
+        )) {
           return true;
         }
       }
