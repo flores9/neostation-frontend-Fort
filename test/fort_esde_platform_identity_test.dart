@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neostation/models/system_model.dart';
+import 'package:neostation/repositories/system_repository.dart';
 import 'package:neostation/services/fort_esde_library_service.dart';
 import 'package:neostation/services/fort_esde_platform_reconciler.dart';
 import 'package:neostation/services/fort_esde_scan_plan_service.dart';
@@ -65,6 +66,28 @@ void main() {
       expect(sources.single.romDirectory, '$root/roms/amstradcpc');
     });
 
+    test(
+      'ROM folders under MediaDirectory are not treated as media evidence',
+      () async {
+        final root = temp.path.replaceAll('\\', '/');
+        await _writeSettings(root, mediaDirectory: '$root/roms');
+        await Directory('$root/roms/cpc').create(recursive: true);
+        await Directory('$root/roms/amstradcpc').create(recursive: true);
+        await _writeGamelist(root, 'amstradcpc');
+
+        final sources = await FortEsdeScanPlanService.resolve(
+          profile,
+          esdeRoot: root,
+        );
+
+        expect(sources.map((source) => source.esdeSystemName), ['amstradcpc']);
+        expect(
+          sources.map((source) => source.esdeSystemName),
+          isNot(contains('cpc')),
+        );
+      },
+    );
+
     test('real ES-DE siblings survive on one NeoStation profile', () async {
       final root = temp.path.replaceAll('\\', '/');
       await _writeSettings(root);
@@ -88,6 +111,40 @@ void main() {
         isNot(contains('cpc')),
       );
     });
+
+    test(
+      'detected platform list hides stale canonical Fort alias beside sibling',
+      () async {
+        await FortEsdeLibraryService.upsertPlatform(
+          esdeSystemName: 'cpc',
+          appSystemId: 'cpc',
+          displayName: 'Amstrad CPC',
+          romDirectory: '/roms/cpc',
+          mediaDirectory: '/media/cpc',
+        );
+        await FortEsdeLibraryService.upsertPlatform(
+          esdeSystemName: 'amstradcpc',
+          appSystemId: 'cpc',
+          displayName: 'Amstrad CPC',
+          romDirectory: '/roms/amstradcpc',
+          mediaDirectory: '/media/amstradcpc',
+        );
+        await db.execute('''
+          INSERT INTO user_roms (
+            app_system_id, filename, rom_path, fort_esde_system_name
+          ) VALUES
+            ('cpc', 'Old.dsk', '/roms/cpc/Old.dsk', 'cpc'),
+            ('cpc', 'Batman.dsk', '/roms/amstradcpc/Batman.dsk', 'amstradcpc')
+        ''');
+        await SystemRepository.addDetectedSystem('cpc', 'cpc');
+
+        final detected = await SystemRepository.getDetectedSystems();
+        final names = detected.map((system) => system.folderName).toSet();
+
+        expect(names, contains('amstradcpc'));
+        expect(names, isNot(contains('cpc')));
+      },
+    );
 
     test(
       'reconciles phantom canonical provenance without deleting ROM data',
@@ -207,11 +264,14 @@ void main() {
   });
 }
 
-Future<void> _writeSettings(String root) async {
+Future<void> _writeSettings(
+  String root, {
+  String? mediaDirectory,
+}) async {
   await Directory('$root/settings').create(recursive: true);
   await File('$root/settings/es_settings.xml').writeAsString('''
 <string name="ROMDirectory" value="$root/roms" />
-<string name="MediaDirectory" value="$root/media" />
+<string name="MediaDirectory" value="${mediaDirectory ?? '$root/media'}" />
 <bool name="LegacyGamelistFileLocation" value="false" />
 ''');
 }
