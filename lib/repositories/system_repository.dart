@@ -5,9 +5,7 @@ import '../services/fort_esde_library_service.dart';
 
 /// Repository for handling system data (app_systems - read-only)
 class SystemRepository {
-  /// Get all available systems from the database
   static Future<List<SystemModel>> getAllSystems() async {
-    // If the DB is empty, force sync during app startup if necessary
     var systems = await SqliteService.getAllSystems();
     if (systems.isEmpty) {
       await SqliteService.loadAndSyncSystems();
@@ -16,12 +14,6 @@ class SystemRepository {
     return systems;
   }
 
-  /// Get a system by its folder_name.
-  ///
-  /// Fort ES-DE library platforms are checked first because their folder name
-  /// intentionally does not exist as a canonical `app_systems.folder_name`.
-  /// They still carry the canonical profile id, so emulator configuration and
-  /// launch resolution remain entirely upstream-owned.
   static Future<SystemModel?> getSystemByFolderName(String folderName) async {
     try {
       final fort = await FortEsdeLibraryService.getPlatform(folderName);
@@ -52,7 +44,6 @@ class SystemRepository {
     }
   }
 
-  /// Get a system by its ID
   static Future<SystemModel?> getSystemById(String id) async {
     final systems = await getAllSystems();
     try {
@@ -62,8 +53,6 @@ class SystemRepository {
     }
   }
 
-  /// Returns the canonical NeoStation emulation profile behind a Fort
-  /// ES-DE library platform. Native systems are returned unchanged.
   static Future<SystemModel> getCanonicalProfile(SystemModel system) async {
     final id = system.id;
     if (id == null ||
@@ -73,7 +62,6 @@ class SystemRepository {
     return await getSystemById(id) ?? system;
   }
 
-  /// Search systems by name (real_name or folder_name)
   static Future<List<SystemModel>> searchSystems(String query) async {
     final systems = await getAllSystems();
     final lowerQuery = query.toLowerCase();
@@ -87,12 +75,13 @@ class SystemRepository {
         .toList();
   }
 
-  /// Get detected systems with rom count.
+  /// Get detected systems with ROM count.
   ///
-  /// When Fort has source provenance for a canonical profile, replace that one
-  /// collapsed tile with its concrete ES-DE platforms. Example: the upstream
-  /// `cpc` tile becomes `amstradcpc` and `gx4000`, both retaining id `cpc` for
-  /// emulator selection.
+  /// ES-DE concrete library identities replace the native canonical tile for
+  /// their emulator profile. A stale Fort row whose name is itself the
+  /// canonical NeoStation folder is also suppressed whenever a concrete sibling
+  /// for that same profile exists. This makes old alias-driven databases safe to
+  /// display even before their overlay rows are fully reconciled.
   static Future<List<SystemModel>> getDetectedSystems() async {
     final allSystems = await getAllSystems();
     final detected = await SqliteService.getUserDetectedSystems();
@@ -101,7 +90,6 @@ class SystemRepository {
       final isPresent = allSystems.any((s) => s.folderName == d.folderName);
       if (!isPresent) return false;
 
-      // Filter out Android if not on Android platform
       if (d.folderName == 'android' && !Platform.isAndroid) {
         return false;
       }
@@ -109,8 +97,35 @@ class SystemRepository {
       return true;
     }).toList();
 
-    final fortPlatforms =
+    final rawFortPlatforms =
         await FortEsdeLibraryService.getDetectedPlatformSystems();
+    if (rawFortPlatforms.isEmpty) return native;
+
+    final canonicalFolderByProfile = <String, String>{
+      for (final system in allSystems)
+        if (system.id != null)
+          system.id!: system.folderName.toLowerCase(),
+    };
+    final profileHasConcreteSibling = <String, bool>{};
+    for (final platform in rawFortPlatforms) {
+      final profileId = platform.id;
+      if (profileId == null) continue;
+      final canonical = canonicalFolderByProfile[profileId];
+      if (canonical != null && platform.folderName.toLowerCase() != canonical) {
+        profileHasConcreteSibling[profileId] = true;
+      }
+    }
+
+    final fortPlatforms = rawFortPlatforms.where((platform) {
+      final profileId = platform.id;
+      if (profileId == null) return true;
+      final canonical = canonicalFolderByProfile[profileId];
+      if (canonical == null) return true;
+      final isCanonicalAlias = platform.folderName.toLowerCase() == canonical;
+      return !(isCanonicalAlias &&
+          (profileHasConcreteSibling[profileId] ?? false));
+    }).toList(growable: false);
+
     if (fortPlatforms.isEmpty) return native;
 
     final representedProfiles = fortPlatforms
@@ -134,19 +149,15 @@ class SystemRepository {
     }).toList();
   }
 
-  /// Check if a system is detected
   static Future<bool> isSystemDetected(String folderName) async {
     final detectedSystems = await getDetectedSystems();
     return detectedSystems.any((s) => s.folderName == folderName);
   }
 
-  /// Get total detected systems count
   static Future<int> getDetectedSystemCount() async {
     final detectedSystems = await getDetectedSystems();
     return detectedSystems.length;
   }
-
-  // ── System display/scan settings (write) ──────────────────────────────────
 
   static Future<void> setRecursiveScan(String systemId, bool value) =>
       SqliteService.setSystemRecursiveScan(systemId, value);
@@ -157,14 +168,9 @@ class SystemRepository {
   static Future<void> setSubfolderView(String systemId, bool value) =>
       SqliteService.setSystemSubfolderView(systemId, value);
 
-  /// Applies "Show Subfolders" to every system at once (the global toggle in
-  /// Settings > General).
   static Future<void> setSubfolderViewForAll(bool value) =>
       SqliteService.setSubfolderViewForAllSystems(value);
 
-  /// How many systems carry a "Show Subfolders" setting of their own — one that
-  /// differs from [globalValue], the last global choice — and would therefore
-  /// be overwritten by the next global stamp.
   static Future<int> countSubfolderViewOverrides(bool globalValue) =>
       SqliteService.countSubfolderViewOverrides(globalValue);
 
@@ -187,8 +193,6 @@ class SystemRepository {
     logoPath: logoPath,
   );
 
-  // ── System detection (write) ────────────────────────────────────────────
-
   static Future<void> addDetectedSystem(
     String systemId,
     String actualFolderName,
@@ -199,8 +203,6 @@ class SystemRepository {
 
   static Future<void> updateDetectedSystems(List<String> folderNames) =>
       SqliteService.updateDetectedSystems(folderNames);
-
-  // ── System visibility ─────────────────────────────────────────────────────
 
   static Future<Set<String>> getHiddenSystems() async {
     final native = await SqliteService.getHiddenSystems();
@@ -216,12 +218,8 @@ class SystemRepository {
     await SqliteService.setSystemHidden(folderName, isHidden);
   }
 
-  // ── ROM counts ────────────────────────────────────────────────────────────
-
   static Future<int> getRomCountForSystem(String systemId) =>
       SqliteService.getRomCountForSystem(systemId);
-
-  // ── System settings ───────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getSystemSettings(String systemId) =>
       SqliteService.getSystemSettings(systemId);
@@ -229,17 +227,12 @@ class SystemRepository {
   static Future<Set<String>> getExtensionsForSystem(String systemId) =>
       SqliteService.getExtensionsForSystem(systemId);
 
-  // ── System extensions ─────────────────────────────────────────────────────
-
   static Future<Set<String>> getAllValidExtensions() =>
       SqliteService.getAllValidExtensions();
 
   static Future<Map<String, Set<String>>> getSystemExtensionsMap() =>
       SqliteService.getSystemExtensionsMap();
 
-  // ── System statistics ──────────────────────────────────────────────────────
-
-  /// Get System Stats
   static Future<Map<String, int>> getSystemStats() async {
     final allSystems = await getAllSystems();
     final detectedSystems = await getDetectedSystems();
