@@ -54,6 +54,20 @@ class FortEsdeScanPlanService {
   static const int _explicitEsdeEvidence = 4;
   static const int _manualEvidence = 5;
 
+  static const Set<String> _esdeMediaCategories = {
+    '3dboxes',
+    'backcovers',
+    'covers',
+    'fanart',
+    'manuals',
+    'marquees',
+    'miximages',
+    'physicalmedia',
+    'screenshots',
+    'titlescreens',
+    'videos',
+  };
+
   static Future<List<FortEsdeScanSource>> resolve(
     SystemModel system, {
     String? esdeRoot,
@@ -88,8 +102,6 @@ class FortEsdeScanPlanService {
       }
     }
 
-    // A manual Fort override is an explicit user decision and is therefore the
-    // strongest possible evidence for a concrete library identity.
     for (final key in overrides.keys) {
       if (aliases.containsKey(key)) {
         addCandidate(key, _manualEvidence);
@@ -97,13 +109,10 @@ class FortEsdeScanPlanService {
     }
 
     if (resolved != null) {
-      // Custom ES-DE definitions are explicit declarations from ES-DE itself.
       for (final definition in resolved.systems.values) {
         addCandidate(definition.name, _explicitEsdeEvidence);
       }
 
-      // Modern ES-DE gamelist folders preserve the concrete system name even
-      // when the ROMs live on another volume.
       final central = Directory(path.join(resolved.esdeRoot, 'gamelists'));
       if (_canList(central.path)) {
         try {
@@ -112,28 +121,25 @@ class FortEsdeScanPlanService {
               addCandidate(path.basename(dir.path), _gamelistEvidence);
             }
           }
-        } catch (_) {
-          // Storage can disappear between exists/list; weaker evidence below
-          // may still keep a previously valid source discoverable.
-        }
+        } catch (_) {}
       }
 
-      // ES-DE media is also namespaced by the concrete system identity.
+      // MediaDirectory can legally point at a user-selected location. On real
+      // devices it may even be the same base tree used for ROMs. A directory
+      // named after a system is therefore not evidence by itself; require the
+      // ES-DE media-category layout below it before promoting that name to a
+      // library identity.
       final mediaRoot = Directory(resolved.mediaRoot);
       if (_canList(mediaRoot.path)) {
         try {
           for (final dir in mediaRoot.listSync().whereType<Directory>()) {
-            addCandidate(path.basename(dir.path), _mediaEvidence);
+            if (_looksLikeEsdeMediaSystemDirectory(dir)) {
+              addCandidate(path.basename(dir.path), _mediaEvidence);
+            }
           }
-        } catch (_) {
-          // Same removable-storage race as the gamelist enumeration above.
-        }
+        } catch (_) {}
       }
 
-      // A real ROM directory is useful fallback evidence for systems that have
-      // no gamelist/media yet. Crucially, content:// is NOT accepted blindly:
-      // Directory cannot verify a SAF URI and the old `return true` behaviour
-      // promoted every harmless NeoStation alias into a visible platform.
       for (final alias in aliases.values) {
         final key = alias.toLowerCase();
         final explicit = resolved.customSystemRomPaths[key];
@@ -148,20 +154,20 @@ class FortEsdeScanPlanService {
       }
     }
 
-    // The canonical NeoStation folder is commonly just an emulator-profile
-    // name (`cpc`, `genesis`, ...). If ES-DE gives us stronger evidence for a
-    // different identity (`amstradcpc`, `megadrive`, ...), do not expose the
-    // weak canonical fallback as a second library platform.
+    // The canonical NeoStation folder is an emulator-profile identifier, not
+    // automatically an ES-DE library identity. Keep it only when ES-DE itself
+    // gives equally strong or stronger evidence for that exact name. This also
+    // cleans older Fort installs where a canonical alias acquired weak media or
+    // ROM-folder evidence while the real ES-DE sibling had a gamelist/custom
+    // definition.
     final canonicalKey = system.folderName.trim().toLowerCase();
     final canonical = candidates[canonicalKey];
-    final hasStrongerSibling = candidates.entries.any(
-      (entry) =>
-          entry.key != canonicalKey &&
-          entry.value.evidence > _romFolderEvidence,
-    );
+    final strongestSiblingEvidence = candidates.entries
+        .where((entry) => entry.key != canonicalKey)
+        .fold<int>(0, (best, entry) => entry.value.evidence > best ? entry.value.evidence : best);
     if (canonical != null &&
-        canonical.evidence == _romFolderEvidence &&
-        hasStrongerSibling) {
+        canonical.evidence < _gamelistEvidence &&
+        strongestSiblingEvidence > canonical.evidence) {
       candidates.remove(canonicalKey);
     }
 
@@ -190,8 +196,6 @@ class FortEsdeScanPlanService {
           romDirectory = explicit;
         } else if (definition != null ||
             candidate.evidence > _romFolderEvidence) {
-          // Strong ES-DE identity evidence is enough to trust the configured
-          // ROMDirectory even when dart:io cannot probe that volume directly.
           romDirectory = auto?.romDirectory;
         } else {
           final fallback = auto?.romDirectory;
@@ -208,9 +212,6 @@ class FortEsdeScanPlanService {
           owner.name.toLowerCase() != key &&
           (owner.evidence <= _romFolderEvidence ||
               candidate.evidence <= _romFolderEvidence)) {
-        // Same physical source plus one weak alias: keep the stronger ES-DE
-        // identity. Two explicit/strong ES-DE systems are allowed to share a
-        // root because their extension filters may intentionally differ.
         continue;
       }
       rootOwners.putIfAbsent(normalizedRoot, () => candidate);
@@ -240,9 +241,6 @@ class FortEsdeScanPlanService {
       );
     }
 
-    // Clean rows created by the old alias-driven model only when we have a
-    // concrete replacement plan. The reconciliation changes provenance only;
-    // it never deletes user_roms, favourites, playtime or metadata.
     final profileId = system.id;
     if (profileId != null && profileId.isNotEmpty && sources.isNotEmpty) {
       await FortEsdePlatformReconciler.reconcileProfile(
@@ -255,6 +253,18 @@ class FortEsdeScanPlanService {
     }
 
     return sources;
+  }
+
+  static bool _looksLikeEsdeMediaSystemDirectory(Directory directory) {
+    try {
+      for (final child in directory.listSync().whereType<Directory>()) {
+        final name = path.basename(child.path).toLowerCase();
+        if (_esdeMediaCategories.contains(name)) return true;
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
   }
 
   static bool _verifiedDirectoryExists(String candidate) {
