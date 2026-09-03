@@ -16,8 +16,8 @@ jobs:
       - name: Materialize and validate systems pack
         shell: bash
         run: |
-          base64 -d tools/esde_full_pack_builder.py.gz.b64 | gzip -d > /tmp/build_esde_system_pack.py
-          python3 /tmp/build_esde_system_pack.py
+          base64 -d tools/esde_full_pack_builder.py.gz.b64 | gzip -d > tools/build_esde_system_pack.py
+          python3 tools/build_esde_system_pack.py
           test -f dist/NeoStation-ESDE-full-systems-pack/AUDIT_ESDE_ALIGNMENT.md
       - name: Upload complete systems pack
         uses: actions/upload-artifact@v4
