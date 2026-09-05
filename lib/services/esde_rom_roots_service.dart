@@ -9,7 +9,6 @@ import 'logger_service.dart';
 import 'permission_service.dart';
 import 'user_data_location_service.dart';
 
-/// Result of synchronising NeoStation's configured ROM roots with ES-DE.
 class EsdeRomRootSyncResult {
   final List<String> discoveredRoots;
   final List<String> addedRoots;
@@ -26,23 +25,11 @@ class EsdeRomRootSyncResult {
 
 /// Discovers the storage roots used by ES-DE and keeps NeoStation's scanner in
 /// step with them.
-///
-/// ES-DE's normal library root comes from `settings/es_settings.xml` as
-/// `ROMDirectory`. Custom system definitions may override individual systems
-/// with absolute `<path>` values in `custom_systems/es_systems.xml`; their
-/// parent directory is therefore an additional ROM root. This is the common
-/// Android handheld layout where most systems live on SD but one or more live
-/// in internal storage.
 class EsdeRomRootsService {
   EsdeRomRootsService._();
 
   static final _log = LoggerService.instance;
 
-  /// Returns normalized ROM roots in deterministic order.
-  ///
-  /// The configured `ROMDirectory` is first, followed by extra roots inferred
-  /// from system `<path>` entries. `%ROMPATH%`, `%ESPATH%` and `~` are expanded
-  /// using the same semantics ES-DE uses for its settings paths.
   static List<String> discoverRomRoots(String esdeRoot) {
     final roots = <String>[];
     final romDirectory = _readEsdeSetting(esdeRoot, 'ROMDirectory');
@@ -72,8 +59,7 @@ class EsdeRomRootsService {
       }
 
       for (final system in document.findAllElements('system')) {
-        final pathNode = system.getElement('path');
-        final raw = pathNode?.innerText.trim();
+        final raw = system.getElement('path')?.innerText.trim();
         if (raw == null || raw.isEmpty) continue;
 
         final expanded = _expandPath(
@@ -83,8 +69,16 @@ class EsdeRomRootsService {
         );
         if (expanded == null || expanded.isEmpty) continue;
 
-        // A system path points at its platform directory. NeoStation wants the
-        // root that contains platform directories, so register the parent.
+        // Paths already under ROMDirectory need no extra scanner root. This
+        // also avoids accidentally registering nested roots for systems whose
+        // ROMs live one level deeper than usual.
+        if (expandedRomDirectory != null &&
+            _isWithinOrEqual(expanded, expandedRomDirectory)) {
+          continue;
+        }
+
+        // An absolute override points at the system directory itself. Register
+        // its parent so siblings on that storage volume are discovered too.
         final parent = path.dirname(expanded);
         if (parent.isNotEmpty && parent != '.') _addUnique(roots, parent);
       }
@@ -93,14 +87,6 @@ class EsdeRomRootsService {
     return roots;
   }
 
-  /// Adds every newly discovered root that NeoStation can access and performs
-  /// one scan after all additions.
-  ///
-  /// Existing SAF roots are compared through their resolved `/storage/...`
-  /// path, so the same SD card root is not added twice under two spellings.
-  /// The scan intentionally happens before ES-DE metadata import: the importer
-  /// can then match metadata for ROMs from newly discovered roots in the same
-  /// user action instead of requiring a second manual import.
   static Future<EsdeRomRootSyncResult> syncAndScan(
     SqliteConfigProvider provider,
     String esdeRoot,
@@ -137,9 +123,7 @@ class EsdeRomRootsService {
       }
     }
 
-    // Always scan immediately before an ES-DE import when there is a library
-    // configured. This keeps metadata matching correct even when no new root
-    // was added but ROM contents changed since the previous import.
+    // One scan, after all roots are registered and before metadata import.
     if (provider.config.romFolders.isNotEmpty) {
       await provider.scanSystems();
     }
@@ -164,8 +148,6 @@ class EsdeRomRootsService {
 
   static List<File> _systemConfigCandidates(String esdeRoot) => [
     File(path.join(esdeRoot, 'custom_systems', 'es_systems.xml')),
-    // Kept as a fallback for portable/custom layouts that place the file at
-    // the selected ES-DE root itself.
     File(path.join(esdeRoot, 'es_systems.xml')),
   ];
 
@@ -213,12 +195,9 @@ class EsdeRomRootsService {
     }
 
     if (value.contains('%ESPATH%')) {
-      // The selected ES-DE data directory is the most useful answer on Android
-      // and portable installs; it mirrors the importer's path expansion.
       value = value.replaceAll('%ESPATH%', esdeRoot);
     }
 
-    // A relative system path is meaningful only relative to ROMDirectory.
     if (!path.isAbsolute(value)) {
       if (romDirectory == null || romDirectory.isEmpty) return null;
       value = path.join(romDirectory, value);
@@ -237,6 +216,12 @@ class EsdeRomRootsService {
       if (_normalize(real).toLowerCase() == wanted) return true;
     }
     return false;
+  }
+
+  static bool _isWithinOrEqual(String candidate, String root) {
+    final c = _normalize(candidate).toLowerCase();
+    final r = _normalize(root).toLowerCase();
+    return c == r || c.startsWith('$r/');
   }
 
   static String _normalize(String value) {
