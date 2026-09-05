@@ -49,8 +49,6 @@ def patch_launcher() -> None:
         "import '../utils/fort_android_rom_path.dart';\n",
     )
 
-    # Pass SystemModel into Android placeholder resolution so {rom.root} can be
-    # derived from the actual system aliases rather than hardcoded storage paths.
     replace_all_expected(
         path,
         "resolvePlaceholdersAndroid(result['data'], game)",
@@ -199,6 +197,68 @@ def patch_esde_visibility() -> None:
       await GameRepository.getAllGames(),
     );
     final games = visibleGames.where((g) => !g.isHidden).toList();""",
+    )
+
+    importer = "lib/services/esde_import_service.dart"
+    replace_once(
+        importer,
+        "import 'logger_service.dart';\n",
+        "import 'logger_service.dart';\n"
+        "import 'esde_visibility_service.dart';\n",
+    )
+    replace_once(
+        importer,
+        """    if (!gamelistsDir.existsSync()) {
+      _log.w('ES-DE import: no gamelists/ dir at $esdeRoot');
+      return const EsdeImportResult(gamelistsDirFound: false);
+    }
+
+    final systemDirs = gamelistsDir""",
+        """    if (!gamelistsDir.existsSync()) {
+      _log.w('ES-DE import: no gamelists/ dir at $esdeRoot');
+      return const EsdeImportResult(gamelistsDirFound: false);
+    }
+
+    // Fort strict mode stores gamelist membership independently from scanned
+    // ROMs and metadata. Rebuild the snapshot before parsing this import so
+    // removed ES-DE entries cannot survive as stale visibility allowances.
+    await EsdeVisibilityService.prepareImport();
+
+    final systemDirs = gamelistsDir""",
+    )
+    replace_once(
+        importer,
+        """    final games = _selectGames(doc, mediaRoot, esdeDirName);
+    for (var g = 0; g < games.length; g++) {""",
+        """    final games = _selectGames(doc, mediaRoot, esdeDirName);
+
+    // Record membership before attempting the user_roms match. This is
+    // deliberately independent of scan order: a ROM root may be added after
+    // the ES-DE import and strict visibility must still know whether that ROM
+    // belongs to the gamelist.
+    await EsdeVisibilityService.recordSystemMembership(
+      appSystemId,
+      games.map((game) {
+        final rawPath = _text(game, 'path') ?? '';
+        return path.basename(rawPath.replaceAll('\\\\', '/'));
+      }),
+    );
+
+    for (var g = 0; g < games.length; g++) {""",
+    )
+    replace_once(
+        importer,
+        """    await db.update('user_system_settings', {
+      'esde_media_dir': null,
+    }, where: 'esde_media_dir IS NOT NULL');
+    _log.i('ES-DE reset: cleared $deleted metadata rows and media dirs');""",
+        """    await db.update('user_system_settings', {
+      'esde_media_dir': null,
+    }, where: 'esde_media_dir IS NOT NULL');
+    await EsdeVisibilityService.clearMembership();
+    _log.i(
+      'ES-DE reset: cleared $deleted metadata rows, media dirs and Fort gamelist membership',
+    );""",
     )
 
 
