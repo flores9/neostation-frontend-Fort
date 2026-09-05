@@ -22,6 +22,34 @@ def replace_once(path: str, old: str, new: str) -> None:
     print(f"patched {path}")
 
 
+def patch_mame4droid_rompath() -> None:
+    path = "lib/services/launcher_service.dart"
+    replace_once(
+        path,
+        """            final resolvedValue = resolvePlaceholdersAndroid(
+              rawValue,
+              game,
+              system,
+            );
+
+            extra['value'] = resolvedValue;""",
+        """            var resolvedValue = resolvePlaceholdersAndroid(
+              rawValue,
+              game,
+              system,
+            );
+            if (extra['key'] == 'cli_params' && game.romPath != null) {
+              resolvedValue = FortAndroidRomPath.ensureMameRomRoot(
+                resolvedValue,
+                game.romPath!,
+                system,
+              );
+            }
+
+            extra['value'] = resolvedValue;""",
+    )
+
+
 def patch_settings_import() -> None:
     path = "lib/screens/settings_screen/new_settings_options/directories_settings_content.dart"
     replace_once(
@@ -36,10 +64,6 @@ def patch_settings_import() -> None:
       result = await EsdeImportService.import(
         root,""",
         """    try {
-      // Fort: ES-DE is the storage source of truth too. Discover every ROM
-      // root used by es_settings.xml/custom_systems/es_systems.xml, register
-      // newly accessible roots, and rescan BEFORE importing metadata so newly
-      // discovered ROMs match in this same operation.
       await EsdeRomRootsService.syncAndScan(
         context.read<SqliteConfigProvider>(),
         root,
@@ -59,8 +83,6 @@ def patch_setup_import() -> None:
         "import 'package:neostation/services/esde_import_service.dart';\n"
         "import 'package:neostation/services/esde_rom_roots_service.dart';\n",
     )
-    # Capture the provider before the first await in this phase so the later
-    # root sync never reaches through BuildContext across an async gap.
     replace_once(
         path,
         """    await context.read<SqliteConfigProvider>().updateEsdeFolderPath(selected);
@@ -77,8 +99,6 @@ def patch_setup_import() -> None:
       result = await EsdeImportService.import(
         selected,""",
         """    try {
-      // Fort: let the ES-DE configuration add any ROM roots that were not
-      // selected earlier in the wizard, then scan them before metadata import.
       await EsdeRomRootsService.syncAndScan(
         configProvider,
         selected,
@@ -91,6 +111,7 @@ def patch_setup_import() -> None:
 
 def main() -> int:
     base.main()
+    patch_mame4droid_rompath()
     patch_settings_import()
     patch_setup_import()
     print("Fort vNext.2 overlay applied successfully.")
