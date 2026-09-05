@@ -34,6 +34,17 @@ jobs:
       - name: Apply Fort vNext code overlay
         run: python3 fort/apply_fort_vnext.py
 
+      - name: Install audited Fort systems payload
+        shell: bash
+        run: |
+          mkdir -p build/fort
+          cat fort/payload/systems.b64.part* | base64 --decode > build/fort/systems.tar.xz
+          echo '53c4c6e20c15de465b2905853e1aab831ac0ba93925f0802555b316ed48f12bf  build/fort/systems.tar.xz' | sha256sum -c -
+          rm -rf assets/systems
+          tar -xJf build/fort/systems.tar.xz -C assets
+          test "$(find assets/systems -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 212
+          echo "Fort systems payload installed: $(find assets/systems -maxdepth 1 -type f -name '*.json' | wc -l) JSON files"
+
       - name: Make package coexist with official NeoStation
         shell: bash
         run: |
@@ -85,6 +96,8 @@ jobs:
             echo 'upstream_base=de7de7d5584c815769817cc74f1745d28800d7be'
             echo "fort_head=${GITHUB_SHA}"
             echo 'package=com.neogamelab.neostation.preview'
+            echo 'systems_payload_sha256=53c4c6e20c15de465b2905853e1aab831ac0ba93925f0802555b316ed48f12bf'
+            echo 'systems_json_count=212'
           } > build/fort/PROVENANCE.txt
           sha256sum build/app/outputs/flutter-apk/app-release.apk | tee build/fort/SHA256.txt
 
