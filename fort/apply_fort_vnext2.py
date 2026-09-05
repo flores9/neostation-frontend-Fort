@@ -59,6 +59,18 @@ def patch_setup_import() -> None:
         "import 'package:neostation/services/esde_import_service.dart';\n"
         "import 'package:neostation/services/esde_rom_roots_service.dart';\n",
     )
+    # Capture the provider before the first await in this phase so the later
+    # root sync never reaches through BuildContext across an async gap.
+    replace_once(
+        path,
+        """    await context.read<SqliteConfigProvider>().updateEsdeFolderPath(selected);
+
+    setState(() {""",
+        """    final configProvider = context.read<SqliteConfigProvider>();
+    await configProvider.updateEsdeFolderPath(selected);
+
+    setState(() {""",
+    )
     replace_once(
         path,
         """    try {
@@ -68,7 +80,7 @@ def patch_setup_import() -> None:
       // Fort: let the ES-DE configuration add any ROM roots that were not
       // selected earlier in the wizard, then scan them before metadata import.
       await EsdeRomRootsService.syncAndScan(
-        context.read<SqliteConfigProvider>(),
+        configProvider,
         selected,
       );
 
