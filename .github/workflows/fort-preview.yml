@@ -1,0 +1,148 @@
+name: Fort Preview Android
+
+on:
+  push:
+    branches:
+      - 'fort/beta-0.12.0-esde-vnext'
+    paths-ignore:
+      - 'fort/payload/**'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate-and-build:
+    name: Validate overlay and build Android Preview
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Fort branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify pinned upstream baseline
+        shell: bash
+        run: |
+          BASE='271c6b485b171ef7da56644f8c612018227ef8dc'
+          git merge-base --is-ancestor "$BASE" HEAD
+          echo "Fort branch contains upstream baseline $BASE"
+
+      - name: Apply Fort 0.12.0 vNext code overlay
+        run: python3 fort/apply_fort_0120.py
+
+      - name: Install and normalize audited Fort systems payload
+        shell: bash
+        run: |
+          mkdir -p build/fort
+          cat fort/payload/systems.b64.part* | base64 --decode > build/fort/systems.tar.xz
+          echo '53c4c6e20c15de465b2905853e1aab831ac0ba93925f0802555b316ed48f12bf  build/fort/systems.tar.xz' | sha256sum -c -
+          rm -rf assets/systems
+          tar -xJf build/fort/systems.tar.xz -C assets
+          test "$(find assets/systems -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 212
+          python3 fort/prepare_fort_systems.py
+          echo "Fort systems payload installed: $(find assets/systems -maxdepth 1 -type f -name '*.json' | wc -l) JSON files"
+
+      - name: Make package coexist with official NeoStation
+        shell: bash
+        run: |
+          sed -i 's/applicationId = "com.neogamelab.neostation"/applicationId = "com.neogamelab.neostation.preview"/' android/app/build.gradle.kts
+          sed -i 's/manifestPlaceholders\["appName"\] = "NeoStation"/manifestPlaceholders["appName"] = "NeoStation Fort Preview"/' android/app/build.gradle.kts
+          grep -n 'applicationId\|appName' android/app/build.gradle.kts
+
+      - name: Configure stable Fort Preview signing
+        shell: bash
+        run: |
+          base64 --decode fort/signing/fort-preview-keystore.b64 > android/fort-preview.keystore
+          cat > android/key.properties <<'EOF'
+          storePassword=fort-preview
+          keyPassword=fort-preview
+          keyAlias=fortpreview
+          storeFile=../fort-preview.keystore
+          EOF
+          echo '75581b4d4c88d6d1c5a757c36f779dd478b776b34fc96cd4690d5116de7ba7e3  android/fort-preview.keystore' | sha256sum -c -
+          keytool -list -keystore android/fort-preview.keystore -storepass fort-preview -alias fortpreview
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: .fvmrc
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Format Fort-touched Dart sources
+        run: |
+          dart format \
+            lib/utils/fort_android_rom_path.dart \
+            lib/services/esde_visibility_service.dart \
+            lib/services/esde_rom_roots_service.dart \
+            lib/services/launcher_service.dart \
+            lib/services/game/game_list_service.dart \
+            lib/services/game/game_launch_service.dart \
+            lib/services/update_service.dart \
+            lib/services/systems_update_service.dart \
+            lib/services/esde_import_service.dart \
+            lib/screens/search_screen/search_screen.dart \
+            lib/screens/settings_screen/new_settings_options/directories_settings_content.dart \
+            lib/widgets/setup_wizard.dart \
+            test/fort_android_rom_path_test.dart \
+            test/esde_visibility_service_test.dart \
+            test/esde_rom_roots_service_test.dart
+
+      - name: Analyze project
+        run: flutter analyze
+
+      - name: Run full tests
+        run: flutter test
+
+      - name: Build ARM64 Preview APK
+        shell: bash
+        run: |
+          FORT_BUILD_NUMBER=$((920000 + GITHUB_RUN_NUMBER))
+          echo "FORT_BUILD_NUMBER=$FORT_BUILD_NUMBER" >> "$GITHUB_ENV"
+          flutter build apk --release \
+            --target-platform android-arm64 \
+            --build-number "$FORT_BUILD_NUMBER" \
+            --dart-define=FORT_PREVIEW=true
+
+      - name: Record build provenance
+        shell: bash
+        run: |
+          mkdir -p build/fort
+          {
+            echo 'NeoStation Fort Preview 0.12.0 vNext'
+            echo 'upstream_base=271c6b485b171ef7da56644f8c612018227ef8dc'
+            echo "fort_head=${GITHUB_SHA}"
+            echo 'package=com.neogamelab.neostation.preview'
+            echo "version_code=${FORT_BUILD_NUMBER}"
+            echo 'fort_preview=true'
+            echo 'preview_signing_cert_sha256=ED:17:1C:4A:DF:D4:D3:32:83:EA:A6:EB:2C:F0:60:0A:87:27:10:99:7B:E8:4A:F5:BF:19:69:F8:BE:0D:46:87'
+            echo 'source_systems_payload_sha256=53c4c6e20c15de465b2905853e1aab831ac0ba93925f0802555b316ed48f12bf'
+            echo 'systems_json_count=212'
+            echo 'official_app_ota=disabled'
+            echo 'official_systems_ota=disabled'
+            echo 'mame_rompath_repair=disabled'
+          } > build/fort/PROVENANCE.txt
+          sha256sum build/app/outputs/flutter-apk/app-release.apk | tee build/fort/SHA256.txt
+
+      - name: Upload Preview APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: neostation-fort-preview-0.12.0-vnext-android-arm64
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/fort/PROVENANCE.txt
+            build/fort/SHA256.txt
+          if-no-files-found: error
