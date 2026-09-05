@@ -81,56 +81,55 @@ This is likely the same architectural issue as the regional-platform identity pr
 
 ---
 
-## 4. [BUG] MAME4droid Current/2024 launch arguments cannot faithfully represent ES-DE launch profiles
+## 4. [BUG] MAME4droid Current/2024 launch profiles cannot faithfully represent ES-DE path macros
 
 ### Problem
 ES-DE Android MAME4droid profiles use more than the selected ROM path. Typical commands need:
 
 - `ACTION_VIEW`
-- `cli_params`
+- a string extra named `cli_params`
 - `-rompath '%GAMEDIRRAW%;%ROMPATHRAW%/<system>'`
 - media parameters such as `-flop1`, `-cart`, `-cdrom`, `-cass`, etc.
 - `%DATA%` with a MAME machine name (`cpc6128`, `cdimono1`, ...)
 - or `%ROMPROVIDER%` for arcade/software-list entries.
 
-NeoStation currently exposes `{file.path}`, `{file.uri}` and `{file.localuri}`, but not equivalents for the ROM parent/system directory or ROM provider basename.
+NeoStation currently exposes `{file.path}`, `{file.uri}` and `{file.localuri}`, but not direct equivalents for the game directory, configured ROM root or ROM provider/basename.
 
-There is also a second problem: `{file.path}` is converted to a `neostation-realpath:` marker, while Android's marker resolver is designed for a value that starts with the marker. In a MAME4droid string extra such as:
+`{file.path}` is also represented internally as a `neostation-realpath:` marker for Android SAF resolution. That works when the complete value is a path placeholder, but MAME4droid needs the path embedded inside a larger `cli_params` string.
 
-`cli_params = "-rompath ... -flop1 'neostation-realpath:content://...'"`
-
-the marker is embedded inside a larger value, so it is not resolved before the intent is sent.
+Complex MAME autoboot profiles add another constraint: some `cli_params` values contain escaped quotes and `\n` sequences, so representing the whole Intent as one generic tokenized `launch_arguments` string is fragile.
 
 ### Reproduced examples
-Amstrad CPC ES-DE command conceptually requires:
+Amstrad CPC ES-DE requires the equivalent of:
 
-`-rompath '<game-dir>;<system-rom-dir>' -flop1 '<rom-path>'`, data `cpc6128`.
+`-rompath '<game-dir>;<rom-root>/amstradcpc' -flop1 '<rom-path>'`, data `cpc6128`.
 
 Philips CD-i requires:
 
-`-rompath '<game-dir>;<system-rom-dir>' -cdrom '<rom-path>'`, data `cdimono1`.
+`-rompath '<game-dir>;<rom-root>/cdimono1' -cdrom '<rom-path>'`, data `cdimono1`.
 
-Arcade/software-list entries require the ROM provider/basename as the data value rather than the ROM URI.
+Tano Dragon demonstrates why the configured ROM root must remain distinct from the current system directory: its ES-DE profile points to `<rom-root>/dragon32`.
+
+Arcade/software-list entries use `%ROMPROVIDER%` as the data value rather than the ROM URI.
 
 ### Expected behavior
-Add portable placeholders such as:
+Provide portable placeholders equivalent to:
 
-- `{file.dir}`
-- `{system.romdir}`
-- `{file.basename}`
+- `{file.rawpath}` → `%ROMRAW%`
+- `{file.dir}` → `%GAMEDIRRAW%`
+- `{rom.root}` → `%ROMPATHRAW%`
+- `{file.basename}` → `%ROMPROVIDER%`
 
-and resolve path markers even when embedded inside string extras such as `cli_params`.
-
-No system JSON should need a device-specific `/storage/...` path.
+For Android, allow MAME4droid to be defined through the already-supported structured `package` / `activity` / `action` / `data` / `extras` JSON form, with placeholder resolution inside the `cli_params` extra. No system JSON should need a device-specific `/storage/...` path.
 
 ---
 
 ## Existing upstream issues — add evidence rather than duplicate
 
-### #456 — custom ES-DE `MediaDirectory`
-Current upstream import code still has logic based around `downloaded_media`. Our device testing confirms that respecting the custom `MediaDirectory` configured in `settings/es_settings.xml` is necessary when ROM/media storage is moved. Fort should carry this fix until upstream closes it.
+### #456 — custom ES-DE `MediaDirectory` — resolved in current main
+Issue #456 is closed. Current upstream `main` includes `EsdeImportService.resolveMediaRoot()` and tests that read `settings/es_settings.xml` / `MediaDirectory`. Fort should not carry a duplicate patch; only retest this behavior on the Thor against the pinned HEAD.
 
-### #204 — ES-DE folder selection / SD-card layout
+### #204 — ES-DE folder selection / SD-card layout — still open
 Already covers ES-DE import failing with non-default storage layouts. Do not open a duplicate. Retest folder selection on the latest `main` and add Android evidence there if it still fails.
 
 ### #211 — ES-DE media not applied after import
