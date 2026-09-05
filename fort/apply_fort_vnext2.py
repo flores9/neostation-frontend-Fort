@@ -26,27 +26,15 @@ def patch_mame4droid_rompath() -> None:
     path = "lib/services/launcher_service.dart"
     replace_once(
         path,
-        """            final resolvedValue = resolvePlaceholdersAndroid(
-              rawValue,
-              game,
-              system,
-            );
-
-            extra['value'] = resolvedValue;""",
-        """            var resolvedValue = resolvePlaceholdersAndroid(
-              rawValue,
-              game,
-              system,
-            );
+        "            final resolvedValue = resolvePlaceholdersAndroid(rawValue, game, system);",
+        """            var resolvedValue = resolvePlaceholdersAndroid(rawValue, game, system);
             if (extra['key'] == 'cli_params' && game.romPath != null) {
               resolvedValue = FortAndroidRomPath.ensureMameRomRoot(
                 resolvedValue,
                 game.romPath!,
                 system,
               );
-            }
-
-            extra['value'] = resolvedValue;""",
+            }""",
     )
 
 
