@@ -1,20 +1,93 @@
 import '../data/datasources/sqlite_service.dart';
 import '../models/database_game_model.dart';
 
-/// Applies Fort's optional-by-connection strict ES-DE library semantics.
+/// Applies Fort's strict ES-DE library semantics.
 ///
-/// ES-DE import already records `esde_media_subdir` for every gamelist entry it
-/// successfully matches, including an empty string for games in the system
-/// root. That field therefore doubles as durable gamelist-membership evidence
-/// without changing the database schema or hijacking the user's `is_hidden`
-/// state.
-///
-/// Strict filtering is active only while an ES-DE folder is connected AND the
-/// system has an `esde_media_dir` recorded by a successful import. Systems that
-/// only have an art-only media directory but no matched gamelist rows are left
-/// untouched.
+/// Gamelist membership is intentionally stored independently from metadata and
+/// from `user_roms`. ES-DE can be imported before NeoStation has scanned every
+/// ROM root; in that case the upstream importer correctly reports the missing
+/// ROM as unmatched and skips its metadata, but the gamelist still tells us
+/// whether that future ROM should be visible. Persisting that membership here
+/// makes strict mode independent of scan/import order.
 class EsdeVisibilityService {
   EsdeVisibilityService._();
+
+  static const String _systemsTable = 'user_esde_gamelist_systems';
+  static const String _entriesTable = 'user_esde_gamelist_entries';
+
+  static Future<void> _ensureSchema(DatabaseExecutorAdapter db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_systemsTable (
+        app_system_id TEXT PRIMARY KEY,
+        imported_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_entriesTable (
+        app_system_id TEXT NOT NULL,
+        filename_key TEXT NOT NULL,
+        PRIMARY KEY (app_system_id, filename_key)
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_esde_gamelist_entries_system '
+      'ON $_entriesTable(app_system_id)',
+    );
+  }
+
+  /// Starts a new ES-DE import snapshot.
+  ///
+  /// Membership is rebuilt from the XML files on every import so removed
+  /// gamelist entries cannot survive as stale visibility allowances.
+  static Future<void> prepareImport() async {
+    final db = await SqliteService.getDatabase();
+    await _ensureSchema(db);
+    await db.delete(_entriesTable);
+    await db.delete(_systemsTable);
+  }
+
+  /// Records one successfully parsed ES-DE system and all filenames exposed by
+  /// its gamelist, even when NeoStation has not scanned those files yet.
+  ///
+  /// Filenames are normalized case-insensitively because ES-DE matching and the
+  /// importer already treat ROM basenames that way.
+  static Future<void> recordSystemMembership(
+    String appSystemId,
+    Iterable<String> filenames,
+  ) async {
+    final db = await SqliteService.getDatabase();
+    await _ensureSchema(db);
+
+    await db.insert(
+      _systemsTable,
+      {'app_system_id': appSystemId},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
+    final normalized = filenames
+        .map((name) => name.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+
+    final batch = db.batch();
+    for (final filename in normalized) {
+      batch.insert(
+        _entriesTable,
+        {'app_system_id': appSystemId, 'filename_key': filename},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Clears only Fort's ES-DE visibility snapshot. ROMs and user hidden-state
+  /// are deliberately untouched.
+  static Future<void> clearMembership() async {
+    final db = await SqliteService.getDatabase();
+    await _ensureSchema(db);
+    await db.delete(_entriesTable);
+    await db.delete(_systemsTable);
+  }
 
   static Future<List<DatabaseGameModel>> filterLibraryGames(
     List<DatabaseGameModel> games,
@@ -39,50 +112,40 @@ class EsdeVisibilityService {
         .toSet();
     if (systemIds.isEmpty) return games;
 
+    await _ensureSchema(db);
+
     final placeholders = List.filled(systemIds.length, '?').join(',');
     final args = systemIds.toList();
 
-    // A system only enters strict mode after a successful ES-DE import has
-    // recorded its media directory. Art-only systems are later excluded again
-    // unless they also have gamelist membership rows below.
-    final configuredRows = await db.rawQuery(
-      'SELECT app_system_id FROM user_system_settings '
-      'WHERE esde_media_dir IS NOT NULL AND app_system_id IN ($placeholders)',
+    final strictRows = await db.rawQuery(
+      'SELECT app_system_id FROM $_systemsTable '
+      'WHERE app_system_id IN ($placeholders)',
       args,
     );
-    final configuredSystems = configuredRows
+    final strictSystems = strictRows
         .map((row) => row['app_system_id']?.toString())
         .whereType<String>()
         .toSet();
-    if (configuredSystems.isEmpty) return games;
+    if (strictSystems.isEmpty) return games;
 
     final allowedRows = await db.rawQuery(
-      'SELECT app_system_id, filename FROM user_screenscraper_metadata '
-      'WHERE esde_media_subdir IS NOT NULL AND app_system_id IN ($placeholders)',
+      'SELECT app_system_id, filename_key FROM $_entriesTable '
+      'WHERE app_system_id IN ($placeholders)',
       args,
     );
-
     final allowedBySystem = <String, Set<String>>{};
     for (final row in allowedRows) {
       final systemId = row['app_system_id']?.toString();
-      final filename = row['filename']?.toString();
+      final filename = row['filename_key']?.toString();
       if (systemId == null || filename == null) continue;
-      allowedBySystem
-          .putIfAbsent(systemId, () => <String>{})
-          .add(filename.toLowerCase());
+      allowedBySystem.putIfAbsent(systemId, () => <String>{}).add(filename);
     }
-
-    // Do not make a media-only system disappear: strictness requires at least
-    // one matched gamelist row for that system.
-    final strictSystems = configuredSystems
-        .where(allowedBySystem.containsKey)
-        .toSet();
-    if (strictSystems.isEmpty) return games;
 
     return games.where((game) {
       final systemId = game.appSystemId;
       if (systemId == null || !strictSystems.contains(systemId)) return true;
-      return allowedBySystem[systemId]!.contains(game.filename.toLowerCase());
+      final allowed = allowedBySystem[systemId] ?? const <String>{};
+      return allowed.contains(game.filename.toLowerCase());
     }).toList();
   }
 }
