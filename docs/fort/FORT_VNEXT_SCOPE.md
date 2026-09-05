@@ -17,6 +17,7 @@
 - Accidental aliases `_electron`, `atarist__`, `_bbcmicro` removed.
 - Duplicate case-insensitive ownership of `pspminis` and `TurboGrafx-CD` resolved.
 - 86/86 MAME4droid profiles regenerated from the supplied ES-DE `es_systems.xml`.
+- MAME4droid profiles use structured Android package/activity/action/data/extras instead of a tokenized command string.
 - No hardcoded `/storage/...` paths in regenerated MAME4droid commands.
 - CD-i remains without M3U by design.
 
@@ -26,28 +27,29 @@
 
 Required placeholder contract:
 
-- `{file.path}` — selected ROM real path.
-- `{file.dir}` — selected ROM parent directory.
-- `{system.romdir}` — system directory derived from ROM path/system aliases.
+- `{file.rawpath}` — selected ROM real filesystem path / ES-DE `%ROMRAW%`.
+- `{file.dir}` — selected ROM parent directory / ES-DE `%GAMEDIRRAW%`.
+- `{rom.root}` — configured ROM root inferred from ROM path and system aliases / ES-DE `%ROMPATHRAW%`.
 - `{file.basename}` — filename without extension / ES-DE `%ROMPROVIDER%` equivalent.
 
-Android must resolve path markers embedded inside a larger string extra (`cli_params`) or pre-resolve external-storage SAF paths before building the intent.
+The placeholders are resolved before the Android Intent is built, so MAME4droid can receive them safely inside a single `cli_params` string extra.
 
 ### Strict ES-DE library
 
-Fort behavior: systems successfully imported from a `gamelist.xml` can use gamelist membership as the visible-library source of truth. Physical files not listed remain untouched and usable by emulators.
+Fort behavior: systems successfully imported from a `gamelist.xml` use imported gamelist membership as the visible-library source of truth while ES-DE remains connected. Physical files not listed remain untouched and usable by emulators.
 
-The implementation must not repurpose the user's `is_hidden` state.
+The implementation does not repurpose the user's `is_hidden` state. It uses the existing ES-DE bookkeeping (`esde_media_subdir` plus `esde_media_dir`) as membership evidence, so no database migration is required.
 
 ### Custom MediaDirectory
 
-Carry/reapply the working Fort behavior that resolves ES-DE's configured `MediaDirectory` instead of assuming `<ES-DE>/downloaded_media`, until upstream issue #456 is fixed.
+No Fort patch required on this baseline. Upstream #456 is closed and current `main` already includes `EsdeImportService.resolveMediaRoot()` plus tests for ES-DE's configured `MediaDirectory`. Keep this as a Thor regression test only.
 
 ## QA gates
 
 - JSON parse and identity audit.
 - No duplicate exact/case-insensitive folder ownership.
 - MAME profile conversion audit.
-- Dart format / Flutter analyze / tests.
-- Android Preview build from the pinned upstream SHA + Fort commits.
-- Device verification: CPC, CD-i, Arcade/MAME; Mega Drive, Saturn, 32X, SNES; strict CD-i Disc 2 visibility.
+- Fort overlay anchors must apply exactly once against the pinned upstream base.
+- Dart format / Flutter analyze / full tests.
+- Android ARM64 Preview build with package `com.neogamelab.neostation.preview`.
+- Device verification: CPC, CD-i, Arcade/MAME; Mega Drive, Saturn, 32X, SNES; strict CD-i Disc 2 visibility; custom MediaDirectory regression.
