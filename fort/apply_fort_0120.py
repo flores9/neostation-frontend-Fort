@@ -252,8 +252,7 @@ def patch_gamepad_launch_focus() -> None:
     _focusOwnerId = id;
     _log.i('[GamepadNavigationManager] Launch focus owner: $id');
   }
-
-  /// Returns input to the layer that owned it when the game ends.""",
+""",
         """  static void rememberFocusOwner(String id) {
     _focusOwnerId = id;
     _log.i('[GamepadNavigationManager] Launch focus owner: $id');
@@ -271,8 +270,7 @@ def patch_gamepad_launch_focus() -> None:
       '${_focusOwnerId ?? 'none'}',
     );
   }
-
-  /// Returns input to the layer that owned it when the game ends.""",
+""",
     )
 
     launch = "lib/screens/game_screen/my_games_list/launch_flow.dart"
