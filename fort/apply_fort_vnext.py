@@ -262,9 +262,23 @@ def patch_esde_visibility() -> None:
     )
 
 
+def patch_launch_failure_context_guard() -> None:
+    """Guard the callback BuildContext after the async game-list reload."""
+    launch = "lib/screens/game_screen/my_games_list/launch_flow.dart"
+    replace_once(
+        launch,
+        """          await showDialog(
+            context: ctx,""",
+        """          if (!ctx.mounted) return;
+          await showDialog(
+            context: ctx,""",
+    )
+
+
 def main() -> int:
     patch_launcher()
     patch_esde_visibility()
+    patch_launch_failure_context_guard()
     print("Fort vNext code overlay applied successfully.")
     return 0
 
