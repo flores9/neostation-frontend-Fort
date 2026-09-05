@@ -11,6 +11,14 @@ void main() {
     color: '#000000',
     folders: ['cdi', 'cdimono1', 'philipscdi'],
   );
+  const odyssey2 = SystemModel(
+    id: 'mo2',
+    folderName: 'odyssey2',
+    realName: 'Magnavox Odyssey2',
+    iconImage: '',
+    color: '#000000',
+    folders: ['odyssey2', 'videopac'],
+  );
 
   test('resolves primary ExternalStorageProvider document URI', () {
     const uri =
@@ -51,6 +59,28 @@ void main() {
     expect(
       FortAndroidRomPath.basenameWithoutExtension('outrun.zip'),
       'outrun',
+    );
+  });
+
+  test('MAME4droid rompath adds common removable-storage ROM root', () {
+    const rom = '/storage/14F5-471E/ROMs/odyssey2/4 in 1 Row (Europe).zip';
+    const cli =
+        "-rompath '/storage/14F5-471E/ROMs/odyssey2;/storage/14F5-471E/ROMs/odyssey2' -cart '$rom'";
+
+    expect(
+      FortAndroidRomPath.ensureMameRomRoot(cli, rom, odyssey2),
+      "-rompath '/storage/14F5-471E/ROMs/odyssey2;/storage/14F5-471E/ROMs' -cart '$rom'",
+    );
+  });
+
+  test('MAME4droid rompath derives internal-storage root per game', () {
+    const rom = '/storage/emulated/0/ROMs/odyssey2/Game.zip';
+    const cli =
+        "-rompath '/storage/emulated/0/ROMs/odyssey2;/storage/emulated/0/ROMs/odyssey2' -cart '$rom'";
+
+    expect(
+      FortAndroidRomPath.ensureMameRomRoot(cli, rom, odyssey2),
+      "-rompath '/storage/emulated/0/ROMs/odyssey2;/storage/emulated/0/ROMs' -cart '$rom'",
     );
   });
 }
