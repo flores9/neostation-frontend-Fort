@@ -24,17 +24,39 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 def patch_mame4droid_rompath() -> None:
     path = "lib/services/launcher_service.dart"
+
+    # Repair MAME4droid's -rompath in the common Android placeholder resolver,
+    # not in one particular extras representation. Fort's audited systems use
+    # structured package/activity/data/extras blocks, while upstream configs can
+    # still use launch_arguments. Both paths call this resolver, so keeping the
+    # repair here guarantees identical behavior for both representations.
     replace_once(
         path,
-        "            final resolvedValue = resolvePlaceholdersAndroid(rawValue, game, system);",
-        """            var resolvedValue = resolvePlaceholdersAndroid(rawValue, game, system);
-            if (extra['key'] == 'cli_params' && game.romPath != null) {
-              resolvedValue = FortAndroidRomPath.ensureMameRomRoot(
-                resolvedValue,
-                game.romPath!,
-                system,
-              );
-            }""",
+        """      result = result.replaceAll(
+        '{file.basename}',
+        FortAndroidRomPath.basenameWithoutExtension(game.romname),
+      );
+
+      // {file.path} and {file.localuri} use marker-based resolution: Kotlin's""",
+        """      result = result.replaceAll(
+        '{file.basename}',
+        FortAndroidRomPath.basenameWithoutExtension(game.romname),
+      );
+
+      // ES-DE MAME4droid templates can resolve GAMEDIRRAW and
+      // ROMPATHRAW/system to the same platform directory. Always add the
+      // common ROM root after placeholder expansion so BIOS files stored
+      // directly in each platform folder remain discoverable. This runs for
+      // both launch_arguments and structured extras profiles.
+      if (result.contains('-rompath')) {
+        result = FortAndroidRomPath.ensureMameRomRoot(
+          result,
+          romPath,
+          system,
+        );
+      }
+
+      // {file.path} and {file.localuri} use marker-based resolution: Kotlin's""",
     )
 
 
