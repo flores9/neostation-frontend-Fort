@@ -4,12 +4,27 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SYSTEMS = ROOT / "assets" / "systems"
+PRESERVED_UPSTREAM = ROOT / "build" / "fort" / "upstream_systems"
 OLD_MAME_LABEL = "MAME4droid 2024"
 NEW_MAME_LABEL = "MAME4droid Current"
+
+
+def restore_preserved_upstream_systems() -> list[str]:
+    """Restore upstream-only virtual systems after the Fort payload swap."""
+    restored = []
+    if not PRESERVED_UPSTREAM.is_dir():
+        return restored
+
+    for source in sorted(PRESERVED_UPSTREAM.glob("*.json")):
+        target = SYSTEMS / source.name
+        shutil.copy2(source, target)
+        restored.append(source.name)
+    return restored
 
 
 def replace_label(value):
@@ -48,9 +63,12 @@ def is_lcd_candidate(path: pathlib.Path, data: dict) -> bool:
 
 
 def main() -> int:
+    restored = restore_preserved_upstream_systems()
     files = sorted(SYSTEMS.glob("*.json"))
     if not files:
         raise RuntimeError("Fort systems payload is empty")
+    if "collections.json" not in {file.name for file in files}:
+        raise RuntimeError("NeoStation 0.12 collections.json was not preserved")
 
     renamed_files = []
     deduped_folders = []
@@ -113,6 +131,7 @@ def main() -> int:
         if len(owner_ids) > 1 and (owner_ids & lcd_ids):
             shared_lcd_aliases[alias] = owners
 
+    print(f"Restored upstream-only systems: {restored}")
     print(f"Fort systems normalized: {len(files)} JSON files")
     print(f"MAME4droid display label updated in: {renamed_files}")
     print(f"Duplicate folder aliases removed within files: {deduped_folders}")

@@ -59,4 +59,45 @@ void main() {
 
     expect(visible, [game]);
   });
+
+  test('LCD Games keeps only the first row for an exact duplicate filename', () async {
+    await EsdeVisibilityService.prepareImport();
+    await EsdeVisibilityService.recordSystemMembership('lcdgames', [
+      'Zelda.mgw',
+    ]);
+
+    final good = DatabaseGameModel(
+      appSystemId: 'lcdgames',
+      filename: 'Zelda.mgw',
+      romPath: '/storage/roms/lcdgames/Zelda.mgw',
+    );
+    final stale = DatabaseGameModel(
+      appSystemId: 'lcdgames',
+      filename: 'Zelda.mgw',
+      romPath: 'content://stale/lcdgames/Zelda.mgw',
+    );
+
+    final visible = await EsdeVisibilityService.filterLibraryGames([good, stale]);
+
+    expect(visible, [good]);
+  });
+
+  test('same filename in non-LCD systems is not globally deduplicated', () async {
+    await EsdeVisibilityService.prepareImport();
+
+    final a = DatabaseGameModel(
+      appSystemId: 'nes',
+      filename: 'Game.zip',
+      romPath: '/roms/a/Game.zip',
+    );
+    final b = DatabaseGameModel(
+      appSystemId: 'nes',
+      filename: 'Game.zip',
+      romPath: '/roms/b/Game.zip',
+    );
+
+    final visible = await EsdeVisibilityService.filterLibraryGames([a, b]);
+
+    expect(visible, [a, b]);
+  });
 }

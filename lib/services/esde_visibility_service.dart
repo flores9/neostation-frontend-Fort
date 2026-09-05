@@ -14,6 +14,7 @@ class EsdeVisibilityService {
 
   static const String _systemsTable = 'user_esde_gamelist_systems';
   static const String _entriesTable = 'user_esde_gamelist_entries';
+  static const String _lcdGamesSystemId = 'lcdgames';
 
   static Future<void> _ensureSchema(DatabaseExecutorAdapter db) async {
     await db.execute('''
@@ -89,10 +90,35 @@ class EsdeVisibilityService {
     await db.delete(_systemsTable);
   }
 
+  /// Removes the stale LCD duplicate shape seen on upgraded Fort databases.
+  ///
+  /// The duplicate rows share the same `lcdgames` system and ROM filename but
+  /// carry different `rom_path` spellings. The first row is the launchable one
+  /// on-device; the stale second row fails at emulator handoff. This is
+  /// deliberately *not* a title-based distinct: two different ROM filenames
+  /// may legitimately resolve to the same display title, and every other
+  /// system remains untouched.
+  static List<DatabaseGameModel> _dedupeLcdGames(
+    List<DatabaseGameModel> games,
+  ) {
+    final seen = <String>{};
+    return games.where((game) {
+      if (game.appSystemId?.toLowerCase() != _lcdGamesSystemId) return true;
+
+      final filenameKey = game.filename.trim().toLowerCase();
+      if (filenameKey.isEmpty) return true;
+      return seen.add(filenameKey);
+    }).toList();
+  }
+
   static Future<List<DatabaseGameModel>> filterLibraryGames(
     List<DatabaseGameModel> games,
   ) async {
     if (games.isEmpty) return games;
+
+    // Do this before the ES-DE guards so an upgraded database is repaired at
+    // presentation time even before the user runs another ES-DE import.
+    final candidateGames = _dedupeLcdGames(games);
 
     final db = await SqliteService.getDatabase();
     final configRows = await db.query(
@@ -103,14 +129,14 @@ class EsdeVisibilityService {
     final esdeRoot = configRows.isEmpty
         ? ''
         : (configRows.first['esde_folder_path']?.toString() ?? '').trim();
-    if (esdeRoot.isEmpty) return games;
+    if (esdeRoot.isEmpty) return candidateGames;
 
-    final systemIds = games
+    final systemIds = candidateGames
         .map((game) => game.appSystemId)
         .whereType<String>()
         .where((id) => id.isNotEmpty)
         .toSet();
-    if (systemIds.isEmpty) return games;
+    if (systemIds.isEmpty) return candidateGames;
 
     await _ensureSchema(db);
 
@@ -126,7 +152,7 @@ class EsdeVisibilityService {
         .map((row) => row['app_system_id']?.toString())
         .whereType<String>()
         .toSet();
-    if (strictSystems.isEmpty) return games;
+    if (strictSystems.isEmpty) return candidateGames;
 
     final allowedRows = await db.rawQuery(
       'SELECT app_system_id, filename_key FROM $_entriesTable '
@@ -141,7 +167,7 @@ class EsdeVisibilityService {
       allowedBySystem.putIfAbsent(systemId, () => <String>{}).add(filename);
     }
 
-    return games.where((game) {
+    return candidateGames.where((game) {
       final systemId = game.appSystemId;
       if (systemId == null || !strictSystems.contains(systemId)) return true;
       final allowed = allowedBySystem[systemId] ?? const <String>{};

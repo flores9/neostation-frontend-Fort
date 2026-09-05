@@ -3,12 +3,14 @@
 
 This overlay intentionally keeps the ES-DE multi-root work from the previous
 Fort line while retiring the discarded global MAME rompath repair. It also
-adds Fort-only release/update policy and a narrow MAME4droid auto-selection
-guard without changing upstream behavior for other standalone emulators.
+adds Fort-only release/update policy, preserves 0.12 virtual systems, fixes
+launch-focus restoration for list/grid/carousel, and verifies collection
+membership writes instead of reporting false-positive success.
 """
 from __future__ import annotations
 
 import pathlib
+import shutil
 import sys
 
 import apply_fort_vnext as base
@@ -26,6 +28,19 @@ def replace_once(path: str, old: str, new: str) -> None:
         )
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
     print(f"patched {path}")
+
+
+def preserve_upstream_virtual_systems() -> None:
+    """Keep 0.12 virtual system JSONs that are not part of the Fort payload."""
+    preserve_dir = ROOT / "build" / "fort" / "upstream_systems"
+    preserve_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("collections.json",):
+        source = ROOT / "assets" / "systems" / name
+        if not source.is_file():
+            raise RuntimeError(f"missing upstream virtual system: {source}")
+        shutil.copy2(source, preserve_dir / name)
+        print(f"preserved upstream virtual system {name}")
 
 
 def patch_settings_import() -> None:
@@ -229,14 +244,188 @@ final _log = LoggerService.instance;""",
     )
 
 
+def patch_gamepad_launch_focus() -> None:
+    manager = "lib/services/gamepad/gamepad_navigation_manager.dart"
+    replace_once(
+        manager,
+        """  static void rememberFocusOwner(String id) {
+    _focusOwnerId = id;
+    _log.i('[GamepadNavigationManager] Launch focus owner: $id');
+  }
+
+  /// Returns input to the layer that owned it when the game ends.""",
+        """  static void rememberFocusOwner(String id) {
+    _focusOwnerId = id;
+    _log.i('[GamepadNavigationManager] Launch focus owner: $id');
+  }
+
+  /// Remembers whichever navigation layer actually owns the controller now.
+  ///
+  /// The games route has a parent `system_games_list` layer plus child layers
+  /// for grid/carousel. Hard-coding the parent makes a return from an emulator
+  /// wake list-style mappings even while Grid or Carousel is still on screen.
+  static void rememberCurrentFocusOwner() {
+    _focusOwnerId = _stack.isEmpty ? null : _stack.last.id;
+    _log.i(
+      '[GamepadNavigationManager] Launch current focus owner: '
+      '${_focusOwnerId ?? 'none'}',
+    );
+  }
+
+  /// Returns input to the layer that owned it when the game ends.""",
+    )
+
+    launch = "lib/screens/game_screen/my_games_list/launch_flow.dart"
+    replace_once(
+        launch,
+        """    _gamepadNav.deactivate();
+    GamepadNavigationManager.rememberFocusOwner('system_games_list');
+""",
+        """    // Capture the active child view before clearing the game list.
+    // In Grid/Carousel that layer is the real owner, not system_games_list.
+    GamepadNavigationManager.rememberCurrentFocusOwner();
+    _gamepadNav.deactivate();
+""",
+    )
+    replace_once(
+        launch,
+        """    GamepadNavigationManager.restoreFocusOwner();
+
+    // Reload games list (was cleared to free RAM during gameplay).""",
+        """    // Reload games first. Grid/Carousel were disposed when the list was
+    // cleared for gameplay, so their navigation layer does not exist yet.
+
+    // Reload games list (was cleared to free RAM during gameplay).""",
+    )
+    replace_once(
+        launch,
+        """    } catch (e) {
+      _SystemGamesListState._log.e(
+        'Error refreshing game data after gameplay: $e',
+      );
+    }
+
+    // Defer to after the games-list reload settles and the details card has""",
+        """    } catch (e) {
+      _SystemGamesListState._log.e(
+        'Error refreshing game data after gameplay: $e',
+      );
+    }
+
+    // Rebuilding the games remounts the Grid/Carousel child. Wait until its
+    // post-frame callback has pushed the child navigation layer, then restore
+    // the owner captured before launch. List mode simply restores the parent.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    GamepadNavigationManager.restoreFocusOwner();
+
+    // Defer to after the games-list reload settles and the details card has""",
+    )
+    replace_once(
+        launch,
+        """          // Restore memory on failed launch.
+          if (mounted) _loadGames();""",
+        """          // Restore memory on failed launch before returning input.
+          if (mounted) await _loadGames();""",
+    )
+    replace_once(
+        launch,
+        """          if (mounted) _gamepadNav.activate();""",
+        """          if (mounted) {
+            // The failed handoff also disposed Grid/Carousel when memory was
+            // released. Let the selected view remount before restoring focus.
+            await WidgetsBinding.instance.endOfFrame;
+            if (mounted) GamepadNavigationManager.restoreFocusOwner();
+          }""",
+    )
+    replace_once(
+        launch,
+        """      _SystemGamesListState._log.e('Error launching game: $error');
+
+      await showDialog(""",
+        """      _SystemGamesListState._log.e('Error launching game: $error');
+
+      // Exceptions happen after the same pre-launch memory release, so restore
+      // the games before showing the error and before handing input back.
+      await _loadGames();
+      if (!mounted) return;
+
+      await showDialog(""",
+    )
+    replace_once(
+        launch,
+        """      if (mounted) {
+        _gamepadNav.activate();
+      }
+    }
+  }
+
+  /// Presents a 'Random Game' picker to the user.""",
+        """      if (mounted) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (mounted) GamepadNavigationManager.restoreFocusOwner();
+      }
+    }
+  }
+
+  /// Presents a 'Random Game' picker to the user.""",
+    )
+
+
+def patch_collection_membership_verification() -> None:
+    path = "lib/providers/collections_provider.dart"
+    replace_once(
+        path,
+        """  Future<void> addGame(String collectionId, GameModel game) async {
+    await CollectionsService.addGame(collectionId, game);
+    await _refresh();
+  }""",
+        """  Future<void> addGame(String collectionId, GameModel game) async {
+    await CollectionsService.addGame(collectionId, game);
+    final membership = await CollectionsService.collectionIdsFor(game);
+    if (!membership.contains(collectionId)) {
+      throw StateError(
+        'Collection membership did not persist for ${game.romname} '
+        'in $collectionId',
+      );
+    }
+    await _refresh();
+  }""",
+    )
+    replace_once(
+        path,
+        """  Future<void> removeGame(String collectionId, GameModel game) async {
+    await CollectionsService.removeGame(collectionId, game);
+    await _refresh();
+  }""",
+        """  Future<void> removeGame(String collectionId, GameModel game) async {
+    await CollectionsService.removeGame(collectionId, game);
+    final membership = await CollectionsService.collectionIdsFor(game);
+    if (membership.contains(collectionId)) {
+      throw StateError(
+        'Collection membership removal did not persist for ${game.romname} '
+        'in $collectionId',
+      );
+    }
+    await _refresh();
+  }""",
+    )
+
+
 def main() -> int:
+    preserve_upstream_virtual_systems()
     base.main()
     patch_settings_import()
     patch_setup_import()
     patch_mame4droid_auto_priority()
     patch_official_app_updates()
     patch_official_system_updates()
-    print("Fort 0.12.0 vNext overlay applied successfully (no MAME rompath repair).")
+    patch_gamepad_launch_focus()
+    patch_collection_membership_verification()
+    print(
+        "Fort 0.12.0 vNext2 overlay applied successfully "
+        "(no MAME rompath repair)."
+    )
     return 0
 
 
