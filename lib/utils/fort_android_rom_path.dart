@@ -20,9 +20,6 @@ class FortAndroidRomPath {
   static const String _externalStorageAuthority =
       'com.android.externalstorage.documents';
 
-  /// Returns a real filesystem path for an ExternalStorageProvider URI.
-  ///
-  /// Returns null for non-external-storage content providers.
   static String? externalStorageRealPath(String value) {
     if (!value.startsWith('content://')) return null;
 
@@ -53,7 +50,6 @@ class FortAndroidRomPath {
     return path.posix.normalize('/storage/$volume/$relative');
   }
 
-  /// Best path suitable for a command-line argument.
   static String rawPath(String romPath) {
     final external = externalStorageRealPath(romPath);
     if (external != null) return external;
@@ -63,24 +59,12 @@ class FortAndroidRomPath {
     return romPath;
   }
 
-  /// Directory containing the selected ROM (`%GAMEDIRRAW%` in ES-DE).
   static String fileDirectory(String romPath) =>
       path.posix.dirname(rawPath(romPath).replaceAll('\\', '/'));
 
-  /// Filename without extension (`%ROMPROVIDER%` for MAME software lists).
   static String basenameWithoutExtension(String filename) =>
       path.posix.basenameWithoutExtension(filename.replaceAll('\\', '/'));
 
-  /// Configured ROM root (`%ROMPATHRAW%` in ES-DE), inferred from the selected
-  /// ROM path and the current system's known folder aliases.
-  ///
-  /// Example:
-  /// `/storage/14F5-471E/ROMs/amstradcpc/Game.dsk` ->
-  /// `/storage/14F5-471E/ROMs`
-  ///
-  /// For a game in nested subfolders, the system folder segment is still used,
-  /// not the immediate game directory. If no alias can be found, the parent of
-  /// the ROM directory is a conservative fallback.
   static String romRoot(String romPath, SystemModel system) {
     final resolved = rawPath(romPath).replaceAll('\\', '/');
     final segments = path.posix.split(resolved);
@@ -91,8 +75,6 @@ class FortAndroidRomPath {
       ...system.folders.map((folder) => folder.toLowerCase()),
     }..removeWhere((value) => value.isEmpty);
 
-    // Ignore the final filename segment. Use the last matching folder so a
-    // parent path that happens to share an alias cannot win accidentally.
     for (var i = segments.length - 2; i >= 0; i--) {
       if (!aliases.contains(segments[i].toLowerCase())) continue;
       if (i == 0) return '/';
@@ -101,5 +83,34 @@ class FortAndroidRomPath {
 
     final gameDir = path.posix.dirname(resolved);
     return path.posix.dirname(gameDir);
+  }
+
+  /// Ensures MAME4droid searches the common ROM root as well as the platform
+  /// directory. This supports loose BIOS files stored directly alongside ROMs.
+  static String ensureMameRomRoot(
+    String cliParams,
+    String romPath,
+    SystemModel system,
+  ) {
+    final match = RegExp(r'''-rompath\s+(['"])(.*?)\1''').firstMatch(cliParams);
+    if (match == null) return cliParams;
+
+    final quote = match.group(1)!;
+    final existing = match.group(2)!;
+    final root = romRoot(romPath, system);
+
+    final paths = <String>[];
+    for (final value in [...existing.split(';'), root]) {
+      final normalized = path.posix.normalize(value.trim().replaceAll('\\', '/'));
+      if (normalized.isEmpty || normalized == '.') continue;
+      if (paths.any((item) => item.toLowerCase() == normalized.toLowerCase())) {
+        continue;
+      }
+      paths.add(normalized);
+    }
+
+    if (paths.isEmpty) return cliParams;
+    final replacement = '-rompath $quote${paths.join(';')}$quote';
+    return cliParams.replaceRange(match.start, match.end, replacement);
   }
 }
